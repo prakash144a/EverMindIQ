@@ -1,0 +1,20 @@
+# Dependencies to run the backend in mock mode and execute the test suite.
+# Used for the offline wheelhouse workflow (see OFFLINE_INSTALL.md).
+# The heavy GCP/Gemini libraries (the [gcp] extra in pyproject.toml) are NOT needed for local dev/tests.
+
+# --- runtime (mock mode) ---
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7
+pydantic-settings>=2.3
+python-multipart>=0.0.9
+httpx>=0.27
+
+# --- test / lint ---
+pytest>=8.2
+pytest-asyncio>=0.23
+ruff>=0.5
+
+# --- build backend (so an editable/local install works fully offline) ---
+setuptools>=68
+wheel

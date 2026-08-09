@@ -1,0 +1,24 @@
+/// App configuration, overridable at build time via --dart-define.
+///
+/// Example:
+///   flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000 --dart-define=DEV_UID=alice
+class AppConfig {
+  /// REST base URL. Android emulator reaches host localhost via 10.0.2.2.
+  static const String apiBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://localhost:8000',
+  );
+
+  /// Dev-only user id used as the bearer token while Firebase Auth is wired up.
+  /// In production this is replaced by a real Firebase ID token.
+  static const String devUid = String.fromEnvironment(
+    'DEV_UID',
+    defaultValue: 'demo-user',
+  );
+
+  static Uri get wsLiveUri {
+    final base = Uri.parse(apiBaseUrl);
+    final scheme = base.scheme == 'https' ? 'wss' : 'ws';
+    return base.replace(scheme: scheme, path: '/live', queryParameters: {'token': devUid});
+  }
+}

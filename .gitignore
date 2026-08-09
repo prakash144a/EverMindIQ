@@ -216,3 +216,15 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- VoiceIQ monorepo overrides ---
+# The generic Python `lib/` / `build/` ignores above must not swallow the Flutter app.
+!app/lib/
+!app/lib/**
+# But do ignore Flutter build output.
+app/build/
+app/.dart_tool/
+# Python venv created under backend/ during local dev.
+backend/.venv/
+# Offline wheelhouse (downloaded wheels) — commit deliberately if you want it vendored.
+backend/wheelhouse/

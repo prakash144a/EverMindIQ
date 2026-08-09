@@ -1,0 +1,43 @@
+[project]
+name = "voiceiq-backend"
+version = "0.1.0"
+description = "VoiceIQ backend: API, ingestion, RAG, and Gemini Live proxy."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "python-multipart>=0.0.9",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+# Real GCP/Gemini integrations. Not required for mock mode / tests.
+gcp = [
+    "firebase-admin>=6.5",
+    "google-cloud-storage>=2.16",
+    "google-cloud-firestore>=2.16",
+    "google-cloud-pubsub>=2.21",
+    "google-genai>=0.3",
+]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
