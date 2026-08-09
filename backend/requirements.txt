@@ -3,8 +3,15 @@
 # The heavy GCP/Gemini libraries (the [gcp] extra in pyproject.toml) are NOT needed for local dev/tests.
 
 # --- runtime (mock mode) ---
+# NOTE: plain `uvicorn` (not uvicorn[standard]) on purpose. The [standard] extra pulls in `uvloop`,
+# which is Unix-only and has NO Windows wheel — that breaks cross-platform `pip download` for
+# win_amd64. We add back only the Windows-friendly pieces we need: websockets (for the /live
+# WebSocket) and watchfiles (for --reload). The Linux Cloud Run image still uses uvicorn[standard]
+# via pyproject.toml, where uvloop works fine.
 fastapi>=0.115
-uvicorn[standard]>=0.30
+uvicorn>=0.30
+websockets>=12
+watchfiles>=0.21
 pydantic>=2.7
 pydantic-settings>=2.3
 python-multipart>=0.0.9
@@ -14,7 +21,3 @@ httpx>=0.27
 pytest>=8.2
 pytest-asyncio>=0.23
 ruff>=0.5
-
-# --- build backend (so an editable/local install works fully offline) ---
-setuptools>=68
-wheel

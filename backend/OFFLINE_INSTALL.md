@@ -51,10 +51,12 @@ python -m venv .venv
 
 # Install deps from local wheels only — never touches the network:
 python -m pip install --no-index --find-links=wheelhouse -r requirements.txt
-
-# Install this project (build backend is in the wheelhouse, so disable build isolation):
-python -m pip install --no-index --find-links=wheelhouse -e . --no-build-isolation
 ```
+
+You do **not** need to `pip install -e .` — running `python -m pytest` from `backend/` (below) puts
+this folder on `sys.path`, so `import app` resolves without installing the project. (Skipping it also
+avoids re-resolving the `pyproject.toml` `uvicorn[standard]` deps, which aren't in the Windows
+wheelhouse — see Troubleshooting.)
 
 ---
 
@@ -65,8 +67,21 @@ python -m pytest -q            # tests (mock mode, fully offline)
 uvicorn app.main:app --reload  # http://localhost:8000/docs
 ```
 
-> Tip: you can skip the `-e .` editable install entirely — running **`python -m pytest`** from
-> `backend/` puts this folder on `sys.path`, so `import app` resolves without installing the project.
+---
+
+## Troubleshooting
+
+**`Cannot install uvicorn[standard]==... because these package versions have conflicting
+dependencies`** during Step 1 (cross-download).
+
+Cause: `uvicorn[standard]` depends on **`uvloop`**, which is **Unix-only and has no Windows wheel**.
+When cross-downloading for `win_amd64`, pip evaluates dependency markers against the Linux machine it
+runs on (not the Windows target), so it demands `uvloop`, can't find a Windows wheel, and fails.
+
+Fix: this is already handled — `requirements.txt` uses **plain `uvicorn`** plus `websockets` and
+`watchfiles` (all Windows-friendly) instead of `uvicorn[standard]`. Make sure you pulled the latest
+`requirements.txt` and re-run the Step 1 download. (The Linux Cloud Run image still uses
+`uvicorn[standard]` via `pyproject.toml`, where `uvloop` works.)
 
 ---
 
