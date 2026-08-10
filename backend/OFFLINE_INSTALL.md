@@ -83,6 +83,14 @@ Fix: this is already handled — `requirements.txt` uses **plain `uvicorn`** plu
 `requirements.txt` and re-run the Step 1 download. (The Linux Cloud Run image still uses
 `uvicorn[standard]` via `pyproject.toml`, where `uvloop` works.)
 
+**`Could not find a version that satisfies the requirement colorama ...`** during Step 3 (install).
+
+Cause: the mirror image of the above. `colorama` is a **Windows-only** dependency of pytest/click
+(`sys_platform == "win32"`). A Linux cross-download evaluates that marker as False and skips it, so
+it's missing from the wheelhouse. `requirements.txt` now lists `colorama` **unconditionally** so the
+Linux download includes it — re-run Step 1 to refresh the wheelhouse. (General rule: cross-platform
+`pip download` can miss target-OS-only packages; list them explicitly.)
+
 ---
 
 ## Making it permanent (optional)

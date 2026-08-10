@@ -25,6 +25,8 @@ class StorageService:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
         self._mock_objects: set[str] = set()
+        # In mock mode, bytes PUT to the mock upload URL land here, keyed by gs:// path.
+        self._mock_blobs: dict[str, bytes] = {}
 
     def _object_name(self, uid: str) -> str:
         return f"users/{uid}/audio/{uuid.uuid4().hex}.m4a"
@@ -34,8 +36,11 @@ class StorageService:
         gs_path = f"gs://{self.settings.audio_bucket}/{obj}"
         if self.settings.effective_mock:
             self._mock_objects.add(gs_path)
+            # A backend-relative URL: the client resolves it against the API base and PUTs the
+            # bytes to /mock-storage/... which stores them (see put_mock_bytes). This mirrors the
+            # real signed-URL flow (direct client→storage PUT) without needing a real GCS bucket.
             return SignedUpload(
-                upload_url=f"https://mock-upload.local/{self.settings.audio_bucket}/{obj}",
+                upload_url=f"/mock-storage/{self.settings.audio_bucket}/{obj}",
                 audio_path=gs_path,
                 headers={"Content-Type": content_type},
             )
@@ -47,11 +52,17 @@ class StorageService:
             return f"https://mock-download.local/{self.settings.audio_bucket}/{obj}"
         return self._gcs_signed_download(gs_path)  # pragma: no cover - real path
 
+    def put_mock_bytes(self, gs_path: str, data: bytes) -> None:
+        """Store bytes uploaded to the mock signed URL (mock mode only)."""
+        self._mock_objects.add(gs_path)
+        self._mock_blobs[gs_path] = data
+
     def read_bytes(self, gs_path: str) -> bytes:
         """Used by the ingestion worker to fetch audio for transcription."""
         if self.settings.effective_mock:
-            # In mock mode there is no real audio; the transcriber is seeded separately.
-            return b""
+            # Return whatever the client uploaded to the mock URL (the mock transcriber only uses
+            # its length; real speech-to-text is a real-mode concern).
+            return self._mock_blobs.get(gs_path, b"")
         return self._gcs_read(gs_path)  # pragma: no cover - real path
 
     # -- real (GCS) --------------------------------------------------------

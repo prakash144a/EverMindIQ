@@ -1,7 +1,9 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
@@ -33,34 +35,51 @@ class _RecordSheetState extends ConsumerState<RecordSheet> {
 
   Future<void> _start() async {
     setState(() => _error = null);
-    if (!await _recorder.hasPermission()) {
-      setState(() => _error = 'Microphone permission denied.');
-      return;
+    try {
+      if (!await _recorder.hasPermission()) {
+        setState(() => _error =
+            'Microphone permission denied. Allow mic access and try again.');
+        return;
+      }
+      // Web (MediaRecorder) records opus/webm; native records AAC to a temp file.
+      final config = RecordConfig(
+        encoder: kIsWeb ? AudioEncoder.opus : AudioEncoder.aacLc,
+      );
+      String path;
+      if (kIsWeb) {
+        path = ''; // Ignored on web; stop() returns a blob: URL instead.
+      } else {
+        final dir = await getTemporaryDirectory();
+        path = '${dir.path}/voiceiq_${DateTime.now().millisecondsSinceEpoch}.m4a';
+      }
+      await _recorder.start(config, path: path);
+      setState(() {
+        _phase = _Phase.recording;
+        _startedAt = DateTime.now();
+      });
+    } catch (e) {
+      setState(() => _error = 'Could not start recording: $e');
     }
-    final dir = await getTemporaryDirectory();
-    final path = '${dir.path}/voiceiq_${DateTime.now().millisecondsSinceEpoch}.m4a';
-    await _recorder.start(const RecordConfig(encoder: AudioEncoder.aacLc), path: path);
-    setState(() {
-      _phase = _Phase.recording;
-      _startedAt = DateTime.now();
-    });
   }
 
   Future<void> _stopAndSave() async {
-    final path = await _recorder.stop();
-    if (path == null) {
+    // Native returns a file path; web returns a blob: URL.
+    final source = await _recorder.stop();
+    if (source == null) {
       setState(() => _phase = _Phase.idle);
       return;
     }
     setState(() => _phase = _Phase.saving);
     try {
-      final bytes = await File(path).readAsBytes();
+      final bytes = kIsWeb
+          ? await http.readBytes(Uri.parse(source))
+          : await File(source).readAsBytes();
       final duration = _startedAt == null
           ? 0.0
           : DateTime.now().difference(_startedAt!).inMilliseconds / 1000.0;
       await ref.read(apiClientProvider).uploadAndCreate(
             audioBytes: bytes,
-            contentType: 'audio/m4a',
+            contentType: kIsWeb ? 'audio/webm' : 'audio/m4a',
             durationSec: duration,
             eventDate: _isToday(_eventDate) ? null : _eventDate,
           );

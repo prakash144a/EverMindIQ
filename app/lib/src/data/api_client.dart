@@ -48,12 +48,19 @@ class ApiClient {
     if (up.statusCode != 200) _fail(up);
     final upJson = jsonDecode(up.body) as Map<String, dynamic>;
 
-    // 2) PUT audio directly to (signed) storage
-    await _client.put(
-      Uri.parse(upJson['upload_url'] as String),
+    // 2) PUT audio directly to (signed) storage.
+    // Real mode returns an absolute signed URL; mock mode returns a backend-relative path we
+    // resolve against the API base.
+    final rawUploadUrl = upJson['upload_url'] as String;
+    final uploadUri = rawUploadUrl.startsWith('http')
+        ? Uri.parse(rawUploadUrl)
+        : Uri.parse('$_base$rawUploadUrl');
+    final putResp = await _client.put(
+      uploadUri,
       headers: (upJson['headers'] as Map).cast<String, String>(),
       body: audioBytes,
     );
+    if (putResp.statusCode >= 400) _fail(putResp);
 
     // 3) register recording
     final body = <String, dynamic>{
@@ -81,6 +88,15 @@ class ApiClient {
     return (jsonDecode(r.body) as List)
         .map((e) => Recording.fromJson(e as Map<String, dynamic>))
         .toList();
+  }
+
+  /// Raw audio bytes for a recording, for in-app playback. Served behind auth by the backend.
+  Future<Uint8List> fetchAudioBytes(String recordingId) async {
+    final r = await _client.get(_u('/recordings/$recordingId/audio'), headers: {
+      'Authorization': 'Bearer $_token',
+    });
+    if (r.statusCode != 200) _fail(r);
+    return r.bodyBytes;
   }
 
   Future<ChatAnswer> chat(String question, {String? answerLanguage}) async {

@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
 
 from app.core.security import CurrentUser, get_current_user
@@ -64,6 +64,26 @@ def get_recording(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found")
     audio_url = get_storage().signed_download_url(rec.audio_path)
     return RecordingView(recording=rec.public_dict(), audio_url=audio_url)
+
+
+@router.get("/{recording_id}/audio")
+def get_recording_audio(
+    recording_id: str,
+    user: CurrentUser = Depends(get_current_user),
+) -> Response:
+    """Stream the raw audio bytes for in-app playback.
+
+    Serves through the backend (rather than handing out a signed URL) so playback works
+    uniformly in mock and real modes and stays behind the same auth as the metadata.
+    """
+    rec = get_repository().get_recording(user.uid, recording_id)
+    if rec is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found")
+    data = get_storage().read_bytes(rec.audio_path)
+    if not data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio not available")
+    media_type = "audio/webm" if rec.audio_path.endswith(".webm") else "audio/mp4"
+    return Response(content=data, media_type=media_type)
 
 
 @router.delete("/{recording_id}", status_code=status.HTTP_204_NO_CONTENT)

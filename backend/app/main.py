@@ -14,6 +14,7 @@ from app.api.routers import (
     internal,
     live,
     memories,
+    mock_storage,
     recordings,
     settings as settings_router,
     uploads,
@@ -53,6 +54,7 @@ def create_app() -> FastAPI:
     # Testing/dev helpers only when running with in-memory fakes.
     if settings.effective_mock:
         app.include_router(dev.router)
+        app.include_router(mock_storage.router)
 
     return app
 

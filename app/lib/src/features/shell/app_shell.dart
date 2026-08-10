@@ -25,6 +25,40 @@ class _AppShellState extends ConsumerState<AppShell> {
 
   final _pages = const [HomeScreen(), CalendarScreen(), TalkScreen()];
 
+  /// Central action menu: capture a new moment, or jump to Talk to recall past ones.
+  Future<void> _openActionMenu() async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const CircleAvatar(child: Icon(Icons.mic)),
+              title: const Text('Record a moment'),
+              subtitle: const Text('Capture a memory by voice'),
+              onTap: () => Navigator.pop(context, 'record'),
+            ),
+            ListTile(
+              leading: const CircleAvatar(child: Icon(Icons.forum)),
+              title: const Text('Recall Moments'),
+              subtitle: const Text('Talk to AI for insights about your moments'),
+              onTap: () => Navigator.pop(context, 'recall'),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (action == 'record') {
+      await _openRecordSheet();
+    } else if (action == 'recall') {
+      setState(() => _index = 2);
+    }
+  }
+
   Future<void> _openRecordSheet() async {
     final created = await showModalBottomSheet<bool>(
       context: context,
@@ -58,9 +92,9 @@ class _AppShellState extends ConsumerState<AppShell> {
       drawer: const InsightsDrawer(),
       body: IndexedStack(index: _index, children: _pages),
       floatingActionButton: FloatingActionButton.large(
-        onPressed: _openRecordSheet,
-        tooltip: 'Record a moment',
-        child: const Icon(Icons.mic, size: 32),
+        onPressed: _openActionMenu,
+        tooltip: 'Record or recall a moment',
+        child: const Icon(Icons.add, size: 32),
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
       bottomNavigationBar: BottomAppBar(

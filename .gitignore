@@ -228,3 +228,5 @@ app/.dart_tool/
 backend/.venv/
 # Offline wheelhouse (downloaded wheels) — commit deliberately if you want it vendored.
 backend/wheelhouse/
+# JetBrains / Android Studio IDE settings — local, not part of the project.
+.idea/

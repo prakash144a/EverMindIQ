@@ -25,11 +25,13 @@ def test_rag_returns_empty_when_no_memories(client):
 
 
 def test_rag_is_isolated_per_user(make_recording, client):
-    make_recording("alice", "Alice went scuba diving in Bali.")
-    make_recording("bob", "Bob went skiing in the Alps.")
+    # Both memories share the word "vacation" so the (lexical) mock retriever has something to match;
+    # per-user isolation must still ensure Bob only ever sees his own memory.
+    make_recording("alice", "Alice went on vacation scuba diving in Bali.")
+    make_recording("bob", "Bob went on vacation skiing in the Alps.")
 
     r = client.post(
-        "/chat", json={"question": "Where did I travel?"}, headers=auth("bob")
+        "/chat", json={"question": "Tell me about my vacation."}, headers=auth("bob")
     )
     citations = r.json()["citations"]
     assert citations
@@ -41,13 +43,15 @@ def test_rag_is_isolated_per_user(make_recording, client):
 
 
 def test_rag_date_filter(make_recording, client):
-    make_recording("alice", "New Year trip to Japan.", event_date="2024-01-01")
-    make_recording("alice", "Summer beach day.", event_date="2024-07-15")
+    # Both memories share "trip" (so the lexical mock matches both); the date filter must exclude
+    # the out-of-range January one.
+    make_recording("alice", "Trip to Japan for New Year.", event_date="2024-01-01")
+    make_recording("alice", "Trip to the beach in summer.", event_date="2024-07-15")
 
     r = client.post(
         "/chat",
         json={
-            "question": "Where did I go?",
+            "question": "Tell me about my trip.",
             "date_from": "2024-06-01",
             "date_to": "2024-12-31",
         },

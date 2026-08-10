@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:typed_data';
 
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -151,12 +153,11 @@ class _RecordingTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 4),
       child: ListTile(
-        leading: CircleAvatar(
-          child: Icon(rec.isMilestone ? Icons.star : Icons.graphic_eq),
-        ),
+        leading: _AudioPlayButton(recordingId: rec.id),
         title: Text(rec.title.isEmpty ? 'Untitled moment' : rec.title,
             maxLines: 1, overflow: TextOverflow.ellipsis),
         subtitle: Text(
@@ -164,8 +165,90 @@ class _RecordingTile extends StatelessWidget {
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
         ),
-        trailing: Text(_pretty(rec.eventDate), style: const TextStyle(fontSize: 12)),
+        trailing: Column(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            if (rec.isMilestone) Icon(Icons.star, size: 16, color: scheme.primary),
+            Text(_pretty(rec.eventDate), style: const TextStyle(fontSize: 12)),
+          ],
+        ),
       ),
+    );
+  }
+}
+
+/// Play/pause control for a recording. Fetches the audio bytes lazily on first tap and
+/// plays them through a per-tile [AudioPlayer].
+class _AudioPlayButton extends ConsumerStatefulWidget {
+  const _AudioPlayButton({required this.recordingId});
+  final String recordingId;
+
+  @override
+  ConsumerState<_AudioPlayButton> createState() => _AudioPlayButtonState();
+}
+
+class _AudioPlayButtonState extends ConsumerState<_AudioPlayButton> {
+  final _player = AudioPlayer();
+  StreamSubscription<PlayerState>? _sub;
+  Uint8List? _bytes;
+  PlayerState _state = PlayerState.stopped;
+  bool _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _sub = _player.onPlayerStateChanged.listen((s) {
+      if (mounted) setState(() => _state = s);
+    });
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    _player.dispose();
+    super.dispose();
+  }
+
+  Future<void> _toggle() async {
+    if (_state == PlayerState.playing) {
+      await _player.pause();
+      return;
+    }
+    if (_bytes != null && _state == PlayerState.paused) {
+      await _player.resume();
+      return;
+    }
+    setState(() => _loading = true);
+    try {
+      final bytes = _bytes ??=
+          await ref.read(apiClientProvider).fetchAudioBytes(widget.recordingId);
+      if (bytes.isEmpty) {
+        throw Exception('no audio yet');
+      }
+      await _player.play(BytesSource(bytes));
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not play this recording.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final playing = _state == PlayerState.playing;
+    return IconButton.filledTonal(
+      onPressed: _loading ? null : _toggle,
+      tooltip: playing ? 'Pause' : 'Play recording',
+      icon: _loading
+          ? const SizedBox(
+              width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+          : Icon(playing ? Icons.pause : Icons.play_arrow),
     );
   }
 }

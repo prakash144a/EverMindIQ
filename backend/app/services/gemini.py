@@ -48,7 +48,13 @@ class GeminiService:
         if self.settings.effective_mock:
             if audio_path in _TRANSCRIPT_SEED:
                 return _TRANSCRIPT_SEED[audio_path]
-            return ("(no speech detected)", "en")
+            # No seed and mock mode can't run real speech-to-text; return a clear placeholder so
+            # the recorded memory still flows through enrich/index and appears in the app.
+            return (
+                "Voice memo captured (mock mode has no speech-to-text; "
+                "run in cloud mode for a real transcript).",
+                "en",
+            )
         return self._gemini_transcribe(audio_bytes)  # pragma: no cover - real path
 
     # -- enrichment --------------------------------------------------------

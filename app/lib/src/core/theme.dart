@@ -13,7 +13,7 @@ class AppTheme {
       colorScheme: scheme,
       useMaterial3: true,
       appBarTheme: const AppBarTheme(centerTitle: false),
-      cardTheme: CardTheme(
+      cardTheme: CardThemeData(
         elevation: 0,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         clipBehavior: Clip.antiAlias,
