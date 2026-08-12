@@ -132,6 +132,7 @@ resource "google_project_iam_member" "backend_roles" {
     "roles/aiplatform.user",             # call Gemini / embeddings
     "roles/secretmanager.secretAccessor",
     "roles/cloudkms.cryptoKeyEncrypterDecrypter",
+    "roles/firebaseauth.viewer",         # verify_id_token(check_revoked=True) looks up the user record
   ])
   project = var.project_id
   role    = each.value
