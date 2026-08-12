@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../../core/config.dart';
+import '../../data/auth.dart';
 
 /// Talk to AI about your past memories.
 ///
@@ -38,9 +39,12 @@ class _TalkScreenState extends ConsumerState<TalkScreen> {
     _connect();
   }
 
-  void _connect() {
+  Future<void> _connect() async {
     try {
-      final ch = WebSocketChannel.connect(AppConfig.wsLiveUri);
+      final token =
+          await ref.read(firebaseAuthProvider).currentUser?.getIdToken() ??
+              AppConfig.devUid;
+      final ch = WebSocketChannel.connect(AppConfig.wsLiveUri(token));
       ch.stream.listen(
         _onMessage,
         onDone: () => setState(() => _connected = false),

@@ -6,24 +6,32 @@ import 'package:http/http.dart' as http;
 import '../core/config.dart';
 import 'models.dart';
 
+/// Supplies a bearer token (a Firebase ID token in production), or null.
+typedef TokenProvider = Future<String?> Function();
+
 /// Thin REST client for the VoiceIQ backend.
 ///
-/// Auth: sends `Authorization: Bearer <token>`. Today the token is [AppConfig.devUid];
-/// swap in a Firebase ID token once Auth is wired.
+/// Auth: sends `Authorization: Bearer <token>`, where the token comes from
+/// [tokenProvider] (a live Firebase ID token, fetched fresh per request so it
+/// stays valid). Falls back to [AppConfig.devUid] when no provider is given
+/// (local / mock-mode development).
 class ApiClient {
-  ApiClient({http.Client? client, String? baseUrl, String? token})
+  ApiClient({http.Client? client, String? baseUrl, TokenProvider? tokenProvider})
       : _client = client ?? http.Client(),
         _base = baseUrl ?? AppConfig.apiBaseUrl,
-        _token = token ?? AppConfig.devUid;
+        _tokenProvider = tokenProvider;
 
   final http.Client _client;
   final String _base;
-  final String _token;
+  final TokenProvider? _tokenProvider;
 
-  Map<String, String> get _headers => {
-        'Authorization': 'Bearer $_token',
-        'Content-Type': 'application/json',
-      };
+  Future<Map<String, String>> _headers({bool json = true}) async {
+    final token = (await _tokenProvider?.call()) ?? AppConfig.devUid;
+    return {
+      'Authorization': 'Bearer $token',
+      if (json) 'Content-Type': 'application/json',
+    };
+  }
 
   Uri _u(String path, [Map<String, dynamic>? q]) => Uri.parse('$_base$path').replace(
         queryParameters: q?.map((k, v) => MapEntry(k, '$v')),
@@ -44,7 +52,7 @@ class ApiClient {
   }) async {
     // 1) signed URL
     final up = await _client.post(_u('/uploads'),
-        headers: _headers, body: jsonEncode({'content_type': contentType}));
+        headers: await _headers(), body: jsonEncode({'content_type': contentType}));
     if (up.statusCode != 200) _fail(up);
     final upJson = jsonDecode(up.body) as Map<String, dynamic>;
 
@@ -69,7 +77,7 @@ class ApiClient {
       if (eventDate != null) 'event_date': _ymd(eventDate),
       if (title != null && title.isNotEmpty) 'title': title,
     };
-    final rec = await _client.post(_u('/recordings'), headers: _headers, body: jsonEncode(body));
+    final rec = await _client.post(_u('/recordings'), headers: await _headers(), body: jsonEncode(body));
     if (rec.statusCode != 201) _fail(rec);
     return Recording.fromJson(jsonDecode(rec.body) as Map<String, dynamic>);
   }
@@ -82,7 +90,7 @@ class ApiClient {
         if (from != null) 'date_from': _ymd(from),
         if (to != null) 'date_to': _ymd(to),
       }),
-      headers: _headers,
+      headers: await _headers(),
     );
     if (r.statusCode != 200) _fail(r);
     return (jsonDecode(r.body) as List)
@@ -92,16 +100,15 @@ class ApiClient {
 
   /// Raw audio bytes for a recording, for in-app playback. Served behind auth by the backend.
   Future<Uint8List> fetchAudioBytes(String recordingId) async {
-    final r = await _client.get(_u('/recordings/$recordingId/audio'), headers: {
-      'Authorization': 'Bearer $_token',
-    });
+    final r = await _client.get(_u('/recordings/$recordingId/audio'),
+        headers: await _headers(json: false));
     if (r.statusCode != 200) _fail(r);
     return r.bodyBytes;
   }
 
   Future<ChatAnswer> chat(String question, {String? answerLanguage}) async {
     final r = await _client.post(_u('/chat'),
-        headers: _headers,
+        headers: await _headers(),
         body: jsonEncode({
           'question': question,
           if (answerLanguage != null) 'answer_language': answerLanguage,
@@ -112,7 +119,7 @@ class ApiClient {
 
   Future<Insight> insight(String range, {DateTime? from, DateTime? to}) async {
     final r = await _client.post(_u('/insights'),
-        headers: _headers,
+        headers: await _headers(),
         body: jsonEncode({
           'range': range,
           if (from != null) 'date_from': _ymd(from),
@@ -125,7 +132,7 @@ class ApiClient {
   Future<List<MemoryItem>> onThisDay({DateTime? date}) async {
     final r = await _client.get(
       _u('/memories/on-this-day', {if (date != null) 'for_date': _ymd(date)}),
-      headers: _headers,
+      headers: await _headers(),
     );
     if (r.statusCode != 200) _fail(r);
     final j = jsonDecode(r.body) as Map<String, dynamic>;
@@ -135,13 +142,13 @@ class ApiClient {
   }
 
   Future<UserSettings> getSettings() async {
-    final r = await _client.get(_u('/settings'), headers: _headers);
+    final r = await _client.get(_u('/settings'), headers: await _headers());
     if (r.statusCode != 200) _fail(r);
     return UserSettings.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
   }
 
   Future<UserSettings> saveSettings(UserSettings s) async {
-    final r = await _client.put(_u('/settings'), headers: _headers, body: jsonEncode(s.toJson()));
+    final r = await _client.put(_u('/settings'), headers: await _headers(), body: jsonEncode(s.toJson()));
     if (r.statusCode != 200) _fail(r);
     return UserSettings.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
   }

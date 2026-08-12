@@ -16,9 +16,11 @@ class AppConfig {
     defaultValue: 'demo-user',
   );
 
-  static Uri get wsLiveUri {
+  /// WebSocket URL for the `/live` chat channel, authenticated with [token]
+  /// (a Firebase ID token; the backend verifies it in real mode).
+  static Uri wsLiveUri(String token) {
     final base = Uri.parse(apiBaseUrl);
     final scheme = base.scheme == 'https' ? 'wss' : 'ws';
-    return base.replace(scheme: scheme, path: '/live', queryParameters: {'token': devUid});
+    return base.replace(scheme: scheme, path: '/live', queryParameters: {'token': token});
   }
 }

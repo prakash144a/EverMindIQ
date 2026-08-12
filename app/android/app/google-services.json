@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "126206789375",
+    "project_id": "voiceiq-505205",
+    "storage_bucket": "voiceiq-505205.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:126206789375:android:7f6767a62e8fe1de62aeca",
+        "android_client_info": {
+          "package_name": "com.example.voiceiq"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyASsp7--_Lu2pw2oXZuuaLJZGeUGct4leo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
