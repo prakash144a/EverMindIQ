@@ -3,7 +3,7 @@
 A living tracker for every phase and major work item. Update the status boxes as work lands.
 Aligns with the phased delivery in [architecture.md §7](./architecture.md).
 
-**Last updated:** 2026-08-12 (real backend deployed to Cloud Run)
+**Last updated:** 2026-08-12 (Firebase Anonymous auth wired into the app)
 
 ## Status legend
 
@@ -35,7 +35,9 @@ Aligns with the phased delivery in [architecture.md §7](./architecture.md).
   `https://voiceiq-api-fv2se2zeza-uc.a.run.app` in real mode; `/docs` + auth verified.
 - [ ] Automate deploy in CI — Workload Identity Federation + repo vars/secrets (`DEPLOY_ENABLED`, etc.)
   so pushes to `main` redeploy (today's deploy was manual)
-- [ ] Firebase setup — enable Auth providers + App Check (needed for real end-to-end auth in Phase 1)
+- [~] Firebase setup — project added to Firebase, Android app `com.example.voiceiq` registered,
+  `google-services.json` + `firebase_options.dart` generated. **Remaining:** enable the Anonymous
+  sign-in provider (console) + `terraform apply` the `VOICEIQ_FIREBASE_PROJECT` env. App Check: later.
 
 ## Phase 1 — MVP
 
@@ -46,7 +48,9 @@ Aligns with the phased delivery in [architecture.md §7](./architecture.md).
 - [x] Record / Recall action menu (the `+` FAB)
 - [~] Encrypted upload to GCS + CMEK — mock storage works; real GCS/CMEK path stubbed
 - [~] Ingestion pipeline (transcribe → summarize → chunk → embed → index) — mock works; real Gemini + embeddings stubbed
-- [~] Auth via Firebase ID token + App Check — mock accepts a bare uid; real token verification stubbed
+- [~] Auth via Firebase ID token — backend verifies real tokens (REST + `/live` WS); app now signs in
+  with **Firebase Anonymous auth** and sends a live ID token (committed). Pending: enable the Anonymous
+  provider + deploy the backend env, then verify end-to-end. App Check: later.
 - [ ] Talk-to-AI **voice** (Gemini Live, client mic streaming over WSS) — **not built** (text only)
 
 ## Phase 2 — Enrichment
