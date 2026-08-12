@@ -1,8 +1,8 @@
 from tests.conftest import auth
 
 
-def test_healthz_is_public(client):
-    r = client.get("/healthz")
+def test_health_is_public(client):
+    r = client.get("/health")
     assert r.status_code == 200
     assert r.json()["mock"] is True
 

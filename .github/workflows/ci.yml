@@ -38,3 +38,54 @@ jobs:
       - run: flutter pub get
       - run: flutter analyze
       - run: flutter test
+
+  # Build the backend image, deploy Cloud Run, and push Firestore rules/indexes.
+  # Runs only on main once deployment is configured. To enable:
+  #   1. Provision infra (see infra/README.md) so the Artifact Registry repo,
+  #      Cloud Run service, and backend SA exist.
+  #   2. Set up Workload Identity Federation and grant the deploy SA the roles
+  #      run.admin, artifactregistry.writer, cloudbuild.builds.editor,
+  #      datastore.owner (for rules), and iam.serviceAccountUser on the backend SA.
+  #   3. Add repo variables: DEPLOY_ENABLED=true, GCP_PROJECT_ID, GCP_REGION.
+  #   4. Add repo secrets: GCP_WIF_PROVIDER, GCP_DEPLOY_SA.
+  deploy:
+    needs: [backend, app]
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.DEPLOY_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required for Workload Identity Federation
+    env:
+      PROJECT: ${{ vars.GCP_PROJECT_ID }}
+      REGION: ${{ vars.GCP_REGION }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build & push backend image
+        run: |
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/voiceiq/api:${GITHUB_SHA}"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          gcloud builds submit backend --tag "$IMAGE" --quiet
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy voiceiq-api \
+            --image "$IMAGE" \
+            --region "$REGION" \
+            --quiet
+
+      - name: Deploy Firestore rules & indexes
+        run: |
+          npm install -g firebase-tools
+          firebase deploy \
+            --only firestore:rules,firestore:indexes \
+            --project "$PROJECT" \
+            --non-interactive

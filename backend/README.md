@@ -35,7 +35,7 @@ purge.
 
 | Method | Path                     | Purpose                                        |
 |--------|--------------------------|------------------------------------------------|
-| GET    | `/healthz`               | Liveness + mode.                               |
+| GET    | `/health`                | Liveness + mode.                               |
 | POST   | `/uploads`               | Signed URL for direct audio upload.            |
 | POST   | `/recordings`            | Register uploaded audio; triggers ingestion.   |
 | GET    | `/recordings`            | List (optional `date_from`/`date_to`).         |

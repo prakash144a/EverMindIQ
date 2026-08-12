@@ -1,0 +1,12 @@
+# Terraform — never commit state (may contain secrets) or local provider caches.
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+# Keep the lock file committed for reproducible provider versions:
+!.terraform.lock.hcl

@@ -37,8 +37,10 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    @app.get("/healthz", tags=["health"])
-    def healthz() -> dict:
+    # NB: use /health, not /healthz — Google Front End intercepts the exact
+    # path /healthz on *.run.app and returns its own 404 before the container.
+    @app.get("/health", tags=["health"])
+    def health() -> dict:
         return {"status": "ok", "mock": settings.effective_mock}
 
     app.include_router(uploads.router)

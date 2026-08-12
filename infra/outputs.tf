@@ -14,3 +14,8 @@ output "ingest_topic" {
 output "backend_service_account" {
   value = google_service_account.backend.email
 }
+
+output "artifact_registry_repo" {
+  value       = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.api.repository_id}"
+  description = "Docker repository path for the backend image (…/voiceiq)."
+}

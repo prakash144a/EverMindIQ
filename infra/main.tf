@@ -6,6 +6,8 @@
 
 locals {
   services = [
+    "cloudresourcemanager.googleapis.com",
+    "serviceusage.googleapis.com",
     "run.googleapis.com",
     "firestore.googleapis.com",
     "storage.googleapis.com",
@@ -14,6 +16,9 @@ locals {
     "secretmanager.googleapis.com",
     "aiplatform.googleapis.com",
     "firebase.googleapis.com",
+    "artifactregistry.googleapis.com",
+    "cloudbuild.googleapis.com",
+    "billingbudgets.googleapis.com",
   ]
 }
 
@@ -39,6 +44,9 @@ resource "google_kms_crypto_key" "audio" {
   }
 }
 
+# Project metadata (used for the budget filter, which needs the project number).
+data "google_project" "this" {}
+
 # Allow the GCS service agent to use the key.
 data "google_storage_project_service_account" "gcs" {}
 
@@ -46,6 +54,15 @@ resource "google_kms_crypto_key_iam_member" "gcs_uses_key" {
   crypto_key_id = google_kms_crypto_key.audio.id
   role          = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
   member        = "serviceAccount:${data.google_storage_project_service_account.gcs.email_address}"
+}
+
+# --- Artifact Registry: backend container images ----------------------------
+resource "google_artifact_registry_repository" "api" {
+  repository_id = "voiceiq"
+  location      = var.region
+  format        = "DOCKER"
+  description   = "VoiceIQ backend container images."
+  depends_on    = [google_project_service.enabled]
 }
 
 # --- Encrypted audio bucket -------------------------------------------------
@@ -165,5 +182,63 @@ resource "google_cloud_run_v2_service" "api" {
       max_instance_count = 10
     }
   }
+  depends_on = [google_project_service.enabled]
+}
+
+# Public network access: the app authenticates every request with a Firebase ID
+# token, and the /internal/ingest worker route validates the Pub/Sub push OIDC
+# token — so IAM is open at the edge while auth is enforced in the app layer.
+# This binding also lets the Pub/Sub push subscription reach the service.
+resource "google_cloud_run_v2_service_iam_member" "public_invoker" {
+  name     = google_cloud_run_v2_service.api.name
+  location = google_cloud_run_v2_service.api.location
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+}
+
+# --- Billing budget + alerts ------------------------------------------------
+# Scoped to this project. By default, Cloud Billing emails the budget alerts to
+# the billing account's admins and users (i.e. you) at each threshold below.
+resource "google_billing_budget" "monthly" {
+  billing_account = var.billing_account
+  display_name    = "VoiceIQ monthly budget"
+
+  budget_filter {
+    projects               = ["projects/${data.google_project.this.number}"]
+    calendar_period        = "MONTH"
+    credit_types_treatment = "INCLUDE_ALL_CREDITS"
+  }
+
+  amount {
+    specified_amount {
+      currency_code = "USD"
+      units         = tostring(var.monthly_budget_usd)
+    }
+  }
+
+  # Actual-spend alerts at 10% / 40% / 80% / 100% of the ceiling
+  # (with a $50 budget: $5, $20, $40, $50).
+  threshold_rules {
+    threshold_percent = 0.1
+    spend_basis       = "CURRENT_SPEND"
+  }
+  threshold_rules {
+    threshold_percent = 0.4
+    spend_basis       = "CURRENT_SPEND"
+  }
+  threshold_rules {
+    threshold_percent = 0.8
+    spend_basis       = "CURRENT_SPEND"
+  }
+  threshold_rules {
+    threshold_percent = 1.0
+    spend_basis       = "CURRENT_SPEND"
+  }
+  # Early warning: forecast to exceed the ceiling this month.
+  threshold_rules {
+    threshold_percent = 1.0
+    spend_basis       = "FORECASTED_SPEND"
+  }
+
   depends_on = [google_project_service.enabled]
 }
