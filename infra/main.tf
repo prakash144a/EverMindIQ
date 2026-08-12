@@ -176,6 +176,12 @@ resource "google_cloud_run_v2_service" "api" {
         name  = "VOICEIQ_KMS_KEY"
         value = google_kms_crypto_key.audio.id
       }
+      # Pin the Firebase project so verify_id_token validates token aud/iss
+      # instead of relying on metadata auto-discovery. Same project as GCP.
+      env {
+        name  = "VOICEIQ_FIREBASE_PROJECT"
+        value = var.project_id
+      }
     }
     scaling {
       min_instance_count = 0
