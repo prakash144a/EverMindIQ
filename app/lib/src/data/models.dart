@@ -1,8 +1,39 @@
 /// Data models mirroring the backend JSON payloads.
+library;
+
+/// Coerce a JSON value to text.
+///
+/// Several fields (title, summary, mood, …) originate in an LLM's JSON output,
+/// which does not always honour the shape we asked for — a model may answer
+/// `"mood": ["reflective", "warm"]` where a string was requested. A hard cast
+/// there throws while parsing the list and takes down the whole screen, so one
+/// odd recording hides every other one. Coerce instead.
+String asText(dynamic v) {
+  if (v == null) return '';
+  if (v is String) return v;
+  if (v is List) return v.map(asText).where((s) => s.isNotEmpty).join(', ');
+  return '$v';
+}
+
+/// Coerce a JSON value to a list of strings, tolerating a bare string.
+List<String> asTextList(dynamic v) {
+  if (v == null) return const [];
+  if (v is List) return v.map(asText).where((s) => s.isNotEmpty).toList();
+  final single = asText(v);
+  return single.isEmpty ? const [] : [single];
+}
+
+int asInt(dynamic v) {
+  if (v is int) return v;
+  if (v is num) return v.toInt();
+  if (v is String) return int.tryParse(v) ?? 0;
+  return 0;
+}
 
 class Recording {
   final String id;
   final String eventDate; // yyyy-mm-dd
+  final DateTime recordedAt; // local time; drives the "2d ago" labels
   final String status;
   final double durationSec;
   final String transcript;
@@ -15,9 +46,13 @@ class Recording {
   final String mood;
   final bool isMilestone;
 
+  /// True once the user has starred/unstarred by hand; ingestion then leaves it alone.
+  final bool isMilestoneManual;
+
   Recording({
     required this.id,
     required this.eventDate,
+    required this.recordedAt,
     required this.status,
     required this.durationSec,
     required this.transcript,
@@ -29,25 +64,122 @@ class Recording {
     required this.places,
     required this.mood,
     required this.isMilestone,
+    this.isMilestoneManual = false,
   });
 
   factory Recording.fromJson(Map<String, dynamic> j) => Recording(
-        id: j['id'] as String,
-        eventDate: j['event_date'] as String,
-        status: j['status'] as String? ?? 'uploaded',
+        id: asText(j['id']),
+        eventDate: asText(j['event_date']),
+        recordedAt: DateTime.tryParse(asText(j['recorded_at']))?.toLocal() ??
+            DateTime.tryParse(asText(j['event_date'])) ??
+            DateTime.now(),
+        status: j['status'] == null ? 'uploaded' : asText(j['status']),
         durationSec: (j['duration_sec'] as num?)?.toDouble() ?? 0,
-        transcript: j['transcript'] as String? ?? '',
-        language: j['language'] as String? ?? '',
-        title: j['title'] as String? ?? '',
-        summary: j['summary'] as String? ?? '',
-        tags: (j['tags'] as List?)?.cast<String>() ?? const [],
-        people: (j['people'] as List?)?.cast<String>() ?? const [],
-        places: (j['places'] as List?)?.cast<String>() ?? const [],
-        mood: j['mood'] as String? ?? '',
+        transcript: asText(j['transcript']),
+        language: asText(j['language']),
+        title: asText(j['title']),
+        summary: asText(j['summary']),
+        tags: asTextList(j['tags']),
+        people: asTextList(j['people']),
+        places: asTextList(j['places']),
+        mood: asText(j['mood']),
         isMilestone: j['is_milestone'] as bool? ?? false,
+        isMilestoneManual: j['is_milestone_manual'] as bool? ?? false,
+      );
+
+  /// Narrow copy for optimistic UI updates (see `RecordingsNotifier.toggleMilestone`).
+  Recording copyWith({bool? isMilestone}) => Recording(
+        id: id,
+        eventDate: eventDate,
+        recordedAt: recordedAt,
+        status: status,
+        durationSec: durationSec,
+        transcript: transcript,
+        language: language,
+        title: title,
+        summary: summary,
+        tags: tags,
+        people: people,
+        places: places,
+        mood: mood,
+        isMilestone: isMilestone ?? this.isMilestone,
+        isMilestoneManual: isMilestoneManual,
       );
 
   DateTime get eventDateTime => DateTime.parse(eventDate);
+}
+
+/// Who the user is, once they've verified an email. Absent until then.
+class UserProfile {
+  final String preferredName;
+  final String email;
+  final bool emailVerified;
+  final bool signupPromptDismissed;
+  final bool hasProfile;
+
+  const UserProfile({
+    this.preferredName = '',
+    this.email = '',
+    this.emailVerified = false,
+    this.signupPromptDismissed = false,
+    this.hasProfile = false,
+  });
+
+  factory UserProfile.fromJson(Map<String, dynamic> j) => UserProfile(
+        preferredName: asText(j['preferred_name']),
+        email: asText(j['email']),
+        emailVerified: j['email_verified'] as bool? ?? false,
+        signupPromptDismissed: j['signup_prompt_dismissed'] as bool? ?? false,
+        hasProfile: j['has_profile'] as bool? ?? false,
+      );
+
+  /// Two letters for the avatar: first letter of the first and last words
+  /// ("Prakash Annadurai" → "PA"), or the first two letters of a single name
+  /// ("Dhivya" → "DH"). Empty when there's no usable name, so the caller can
+  /// fall back to an icon.
+  String get initials => initialsFor(preferredName);
+}
+
+/// See [UserProfile.initials]. Free function so it can be unit-tested directly.
+String initialsFor(String name) {
+  final words = name
+      .split(RegExp(r'\s+'))
+      .map((w) => w.replaceAll(RegExp(r'[^A-Za-z]'), ''))
+      .where((w) => w.isNotEmpty)
+      .toList();
+  if (words.isEmpty) return '';
+  if (words.length == 1) {
+    final only = words.first;
+    return (only.length == 1 ? only : only.substring(0, 2)).toUpperCase();
+  }
+  return (words.first[0] + words.last[0]).toUpperCase();
+}
+
+/// Outcome of verifying a one-time code.
+///
+/// A restore moves the account onto the current session rather than switching
+/// sessions, so there is no token to exchange and nothing to re-authenticate.
+class VerifyResult {
+  /// "signed_up" | "verified" | "restored"
+  final String status;
+  final UserProfile profile;
+
+  /// For "restored": how many recordings came back.
+  final int restoredRecordings;
+
+  const VerifyResult({
+    required this.status,
+    required this.profile,
+    this.restoredRecordings = 0,
+  });
+
+  bool get isRestore => status == 'restored';
+
+  factory VerifyResult.fromJson(Map<String, dynamic> j) => VerifyResult(
+        status: asText(j['status']),
+        profile: UserProfile.fromJson((j['profile'] as Map?)?.cast<String, dynamic>() ?? {}),
+        restoredRecordings: asInt((j['merged'] as Map?)?['recordings']),
+      );
 }
 
 class Citation {
@@ -64,9 +196,9 @@ class Citation {
   });
 
   factory Citation.fromJson(Map<String, dynamic> j) => Citation(
-        recordingId: j['recording_id'] as String,
-        eventDate: j['event_date'] as String,
-        snippet: j['snippet'] as String? ?? '',
+        recordingId: asText(j['recording_id']),
+        eventDate: asText(j['event_date']),
+        snippet: asText(j['snippet']),
         score: (j['score'] as num?)?.toDouble() ?? 0,
       );
 }
@@ -103,12 +235,12 @@ class Insight {
   });
 
   factory Insight.fromJson(Map<String, dynamic> j) => Insight(
-        range: j['range'] as String,
-        dateFrom: j['date_from'] as String,
-        dateTo: j['date_to'] as String,
-        summary: j['summary'] as String? ?? '',
-        themes: (j['themes'] as List?)?.cast<String>() ?? const [],
-        recordingCount: j['recording_count'] as int? ?? 0,
+        range: asText(j['range']),
+        dateFrom: asText(j['date_from']),
+        dateTo: asText(j['date_to']),
+        summary: asText(j['summary']),
+        themes: asTextList(j['themes']),
+        recordingCount: asInt(j['recording_count']),
       );
 }
 
@@ -130,12 +262,12 @@ class MemoryItem {
   });
 
   factory MemoryItem.fromJson(Map<String, dynamic> j) => MemoryItem(
-        recordingId: j['recording_id'] as String,
-        eventDate: j['event_date'] as String,
-        title: j['title'] as String? ?? '',
-        summary: j['summary'] as String? ?? '',
-        yearsAgo: j['years_ago'] as int? ?? 0,
-        reason: j['reason'] as String? ?? '',
+        recordingId: asText(j['recording_id']),
+        eventDate: asText(j['event_date']),
+        title: asText(j['title']),
+        summary: asText(j['summary']),
+        yearsAgo: asInt(j['years_ago']),
+        reason: asText(j['reason']),
       );
 }
 

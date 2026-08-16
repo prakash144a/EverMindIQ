@@ -1,6 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- Recording voice moments requires microphone access. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <!-- Reaching the backend / Firebase / fonts. (Debug builds inject this
+         automatically; release builds must declare it explicitly.) -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="voiceiq"
         android:name="${applicationName}"
@@ -42,6 +45,13 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- Discover the on-device speech recognizer and TTS engine (Android 11+). -->
+        <intent>
+            <action android:name="android.speech.RecognitionService"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE"/>
         </intent>
     </queries>
 </manifest>

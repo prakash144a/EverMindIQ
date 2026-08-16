@@ -8,8 +8,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import get_settings
 from app.api.routers import (
     account,
+    auth,
     chat,
     dev,
+    feedback,
     insights,
     internal,
     live,
@@ -50,6 +52,9 @@ def create_app() -> FastAPI:
     app.include_router(memories.router)
     app.include_router(settings_router.router)
     app.include_router(account.router)
+    app.include_router(auth.router)
+    app.include_router(auth.profile_router)
+    app.include_router(feedback.router)
     app.include_router(internal.router)
     app.include_router(live.router)
 

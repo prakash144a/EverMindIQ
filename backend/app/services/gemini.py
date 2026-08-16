@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass, field
 
 from app.core.config import Settings, get_settings
+from app.core.media import content_type_for_path
 
 # audio_path -> (transcript, language). Seeded by tests / a dev endpoint in mock mode.
 _TRANSCRIPT_SEED: dict[str, tuple[str, str]] = {}
@@ -31,6 +32,33 @@ class Enrichment:
     mood: str = ""
     is_milestone: bool = False
     transcript_en: str = ""
+
+
+def _as_text(value: object) -> str:
+    """Coerce an LLM JSON value to text.
+
+    The model is asked for a string but does not always oblige — ``"mood":
+    ["reflective", "warm"]`` is a common shape. ``Recording`` is a Pydantic model
+    without ``validate_assignment``, so assigning a list to a ``str`` field is
+    silently accepted and only blows up later in the client's JSON parsing.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        return ", ".join(p for p in (_as_text(v) for v in value) if p)
+    return str(value)
+
+
+def _as_text_list(value: object) -> list[str]:
+    """Coerce an LLM JSON value to a list of strings, tolerating a bare string."""
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [p for p in (_as_text(v) for v in value) if p]
+    single = _as_text(value)
+    return [single] if single else []
 
 
 _SENTENCE_RE = re.compile(r"(?<=[.!?।])\s+")
@@ -55,7 +83,9 @@ class GeminiService:
                 "run in cloud mode for a real transcript).",
                 "en",
             )
-        return self._gemini_transcribe(audio_bytes)  # pragma: no cover - real path
+        return self._gemini_transcribe(  # pragma: no cover - real path
+            audio_bytes, content_type_for_path(audio_path)
+        )
 
     # -- enrichment --------------------------------------------------------
     def enrich(self, transcript: str, language: str, answer_language: str) -> Enrichment:
@@ -82,7 +112,7 @@ class GeminiService:
         text = transcript.strip()
         sentences = _SENTENCE_RE.split(text) if text else []
         first = sentences[0] if sentences else text
-        title = " ".join(text.split()[:6]) or "Untitled moment"
+        title = self._mock_title(text)
         summary = first[:200]
         caps = sorted(set(_CAP_RE.findall(text)))
         lowered = text.lower()
@@ -96,6 +126,19 @@ class GeminiService:
             is_milestone=any(h in lowered for h in _MILESTONE_HINTS),
             transcript_en=text if language.startswith("en") else "",
         )
+
+    @staticmethod
+    def _mock_title(text: str) -> str:
+        """A readable stand-in title; the real path gets one from the LLM."""
+        if not text:
+            return "Untitled moment"
+        if text.startswith("Voice memo captured"):
+            return "Voice memo"
+        words = text.split()
+        title = " ".join(words[:6]).rstrip(".,;:!?")
+        if len(words) > 6:
+            title += "…"
+        return title[:1].upper() + title[1:]
 
     def _mock_answer(self, question: str, context_blocks: list[str], answer_language: str) -> str:
         if not context_blocks:
@@ -132,14 +175,16 @@ class GeminiService:
             vertexai=True, project=self.settings.gcp_project, location=self.settings.gcp_region
         )
 
-    def _gemini_transcribe(self, audio_bytes: bytes) -> tuple[str, str]:  # pragma: no cover
+    def _gemini_transcribe(  # pragma: no cover
+        self, audio_bytes: bytes, mime_type: str
+    ) -> tuple[str, str]:
         from google.genai import types
 
         client = self._client()
         resp = client.models.generate_content(
             model=self.settings.model_reasoning,
             contents=[
-                types.Part.from_bytes(data=audio_bytes, mime_type="audio/m4a"),
+                types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
                 "Transcribe verbatim in the original language and script. Then on a final line "
                 "output 'LANG: <bcp47>'.",
             ],
@@ -161,22 +206,42 @@ class GeminiService:
         resp = client.models.generate_content(
             model=self.settings.model_reasoning,
             contents=(
-                "Extract JSON with keys title, summary, tags, people, places, mood, is_milestone, "
-                f"transcript_en (English translation; empty if already English). Answer language for "
-                f"title/summary: {answer_language}. Transcript ({language}):\n{transcript}"
+                "You are helping someone keep a personal memory journal. The transcript below "
+                "is that person speaking about their own life — it is their memory, not a "
+                "report about a third party.\n\n"
+                "Return JSON with keys title, summary, tags, people, places, mood, "
+                "is_milestone, transcript_en (English translation; empty if already English).\n"
+                "- title: a short, specific, human title for this memory, 3-6 words, from the "
+                "speaker's own perspective (e.g. \"Fishing trip with Dad\", \"The day I moved "
+                "to Chennai\"). No quotes, no trailing punctuation, and never generic filler "
+                "like \"Voice note\" or \"Recording\".\n"
+                "- summary: 1-2 sentences in the FIRST PERSON, as the speaker would write it "
+                "in their own diary (\"I went to...\", \"We spent the afternoon...\"). Never "
+                "write \"the user\", \"the speaker\", \"they\", or any third-person narration.\n"
+                "- is_milestone: true ONLY for a significant life event the person would want "
+                "resurfaced years later — a birth, a death, a wedding or engagement, moving "
+                "home, a new job, a graduation, a major first, a diagnosis or recovery, a "
+                "landmark trip. False for ordinary days, routine updates, passing thoughts, "
+                "and merely happy or pleasant moments. When in doubt, false.\n"
+                f"- Write title and summary in this language: {answer_language}.\n\n"
+                f"Transcript ({language}):\n{transcript}"
             ),
             config=types.GenerateContentConfig(response_mime_type="application/json"),
         )
         data = json.loads(resp.text or "{}")
+        if not isinstance(data, dict):
+            data = {}
+        # Coerce every field: the model's JSON is untrusted input, and a wrong
+        # shape here is stored verbatim and breaks the app's parsing later.
         return Enrichment(
-            title=data.get("title", ""),
-            summary=data.get("summary", ""),
-            tags=data.get("tags", []),
-            people=data.get("people", []),
-            places=data.get("places", []),
-            mood=data.get("mood", ""),
+            title=_as_text(data.get("title")),
+            summary=_as_text(data.get("summary")),
+            tags=_as_text_list(data.get("tags")),
+            people=_as_text_list(data.get("people")),
+            places=_as_text_list(data.get("places")),
+            mood=_as_text(data.get("mood")),
             is_milestone=bool(data.get("is_milestone", False)),
-            transcript_en=data.get("transcript_en", ""),
+            transcript_en=_as_text(data.get("transcript_en")),
         )
 
     def _gemini_answer(self, question, context_blocks, answer_language):  # pragma: no cover

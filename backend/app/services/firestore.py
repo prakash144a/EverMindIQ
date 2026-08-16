@@ -13,10 +13,11 @@ from datetime import date
 from threading import RLock
 
 from app.core.config import Settings, get_settings
+from app.models.feedback import Feedback
 from app.models.insight import Insight, InsightRange
 from app.models.memory import MemoryFeed
 from app.models.recording import Chunk, Recording
-from app.models.user import UserSettings
+from app.models.user import OtpChallenge, UserProfile, UserSettings, normalize_email
 from app.services.embedding import cosine
 
 
@@ -43,6 +44,14 @@ class Repository:
         self._insights: dict[str, dict[str, Insight]] = {}
         # uid -> {yyyy-mm-dd -> MemoryFeed}
         self._feeds: dict[str, dict[str, MemoryFeed]] = {}
+        # uid -> {feedback_id -> Feedback}
+        self._feedback: dict[str, dict[str, Feedback]] = {}
+        # uid -> profile
+        self._profiles: dict[str, UserProfile] = {}
+        # normalized email -> uid
+        self._email_index: dict[str, str] = {}
+        # normalized email -> pending OTP
+        self._otps: dict[str, OtpChallenge] = {}
 
     # -- user settings -----------------------------------------------------
     def get_settings_doc(self, uid: str) -> UserSettings:
@@ -53,6 +62,38 @@ class Repository:
         with self._lock:
             self._users[uid] = settings
             return settings
+
+    # -- profile / identity ------------------------------------------------
+    def get_profile(self, uid: str) -> UserProfile | None:
+        with self._lock:
+            return self._profiles.get(uid)
+
+    def save_profile(self, uid: str, profile: UserProfile) -> UserProfile:
+        with self._lock:
+            self._profiles[uid] = profile
+            return profile
+
+    def uid_for_email(self, email: str) -> str | None:
+        with self._lock:
+            return self._email_index.get(normalize_email(email))
+
+    def set_email_index(self, email: str, uid: str) -> None:
+        with self._lock:
+            self._email_index[normalize_email(email)] = uid
+
+    # -- OTP challenges ----------------------------------------------------
+    def get_otp(self, email: str) -> OtpChallenge | None:
+        with self._lock:
+            return self._otps.get(normalize_email(email))
+
+    def save_otp(self, challenge: OtpChallenge) -> OtpChallenge:
+        with self._lock:
+            self._otps[normalize_email(challenge.email)] = challenge
+            return challenge
+
+    def delete_otp(self, email: str) -> None:
+        with self._lock:
+            self._otps.pop(normalize_email(email), None)
 
     # -- recordings --------------------------------------------------------
     def add_recording(self, rec: Recording) -> Recording:
@@ -87,8 +128,23 @@ class Repository:
             self._chunks.pop(recording_id, None)
             return existed
 
+    # -- feedback ----------------------------------------------------------
+    def add_feedback(self, item: Feedback) -> Feedback:
+        with self._lock:
+            self._feedback.setdefault(item.uid, {})[item.id] = item
+            return item
+
+    def list_feedback(self, uid: str) -> list[Feedback]:
+        with self._lock:
+            items = list(self._feedback.get(uid, {}).values())
+        items.sort(key=lambda f: f.created_at, reverse=True)
+        return items
+
     # -- chunks / vectors --------------------------------------------------
-    def save_chunks(self, recording_id: str, chunks: list[Chunk]) -> None:
+    def save_chunks(self, uid: str, recording_id: str, chunks: list[Chunk]) -> None:
+        # `uid` is unused here (recording ids are globally unique) but is part of
+        # the interface so the Firestore implementation can address the document.
+        del uid
         with self._lock:
             self._chunks[recording_id] = chunks
 
@@ -133,6 +189,49 @@ class Repository:
         with self._lock:
             return self._feeds.get(uid, {}).get(for_date.isoformat())
 
+    # -- merge (restore after reinstall) -----------------------------------
+    def merge_user(self, src_uid: str, dst_uid: str) -> dict[str, int]:
+        """Move everything owned by `src_uid` onto `dst_uid`; return what moved.
+
+        Used when someone reinstalls, records a few memories under the throwaway
+        anonymous identity, then verifies the email of an existing account. The
+        account's own settings and profile win; only content moves.
+
+        Callers MUST have proven the caller controls both sides — see
+        `app/api/routers/auth.py`. Nothing here checks that.
+        """
+        if src_uid == dst_uid:
+            return {"recordings": 0, "feedback": 0, "insights": 0, "feeds": 0}
+        with self._lock:
+            moved_recs = self._recordings.pop(src_uid, {})
+            for rec in moved_recs.values():
+                # uid is denormalized onto the document, so re-bucketing isn't enough.
+                rec.uid = dst_uid
+            self._recordings.setdefault(dst_uid, {}).update(moved_recs)
+
+            moved_feedback = self._feedback.pop(src_uid, {})
+            for item in moved_feedback.values():
+                item.uid = dst_uid
+            self._feedback.setdefault(dst_uid, {}).update(moved_feedback)
+
+            moved_insights = self._insights.pop(src_uid, {})
+            self._insights.setdefault(dst_uid, {}).update(moved_insights)
+
+            # Feeds are a derived cache keyed by date; drop rather than merge so
+            # the next read rebuilds them over the combined set.
+            moved_feeds = self._feeds.pop(src_uid, {})
+            self._feeds.pop(dst_uid, None)
+
+            self._users.pop(src_uid, None)
+            self._profiles.pop(src_uid, None)
+        # Chunks are keyed by recording id, which is preserved, so they follow.
+        return {
+            "recordings": len(moved_recs),
+            "feedback": len(moved_feedback),
+            "insights": len(moved_insights),
+            "feeds": len(moved_feeds),
+        }
+
     # -- account deletion (purge) -----------------------------------------
     def delete_user(self, uid: str) -> None:
         with self._lock:
@@ -141,7 +240,11 @@ class Repository:
             self._recordings.pop(uid, None)
             self._insights.pop(uid, None)
             self._feeds.pop(uid, None)
+            self._feedback.pop(uid, None)
             self._users.pop(uid, None)
+            profile = self._profiles.pop(uid, None)
+            if profile and profile.email:
+                self._email_index.pop(normalize_email(profile.email), None)
 
 
 def _in_range(d: date, lo: date | None, hi: date | None) -> bool:
@@ -152,17 +255,296 @@ def _in_range(d: date, lo: date | None, hi: date | None) -> bool:
     return True
 
 
-# Note: the real Firestore-backed Repository would subclass/replace this with google-cloud-firestore
-# reads/writes and Firestore Vector Search queries. Kept behind the same interface so callers and the
-# ingestion worker are storage-agnostic.
+# ======================================================================
+# Document mapping — pure functions, so they're testable without a server.
+# ======================================================================
+#
+# Everything is stored as `model_dump(mode="json")`, i.e. primitives and ISO
+# strings. Pydantic coerces them back on read, which keeps the mapping trivial
+# and sidesteps the timezone differences between Firestore's native timestamps
+# and Python's. ISO strings also sort correctly, since every datetime written is
+# UTC.
 
-_repo_singleton: Repository | None = None
+
+def recording_to_doc(rec: Recording) -> dict:
+    return rec.model_dump(mode="json")
 
 
-def get_repository() -> Repository:
+def doc_to_recording(doc: dict) -> Recording:
+    return Recording(**doc)
+
+
+def chunks_to_doc(chunks: list[Chunk]) -> dict:
+    """All of a recording's chunks in ONE document.
+
+    A recall query scans every chunk the user owns and Firestore bills per
+    document read, so one document per chunk would multiply the cost of every
+    question by the chunk count for no benefit. A few hundred chunks of 256
+    floats stays far inside the 1 MiB document limit.
+    """
+    return {"chunks": [c.model_dump(mode="json") for c in chunks]}
+
+
+def doc_to_chunks(doc: dict | None) -> list[Chunk]:
+    if not doc:
+        return []
+    return [Chunk(**c) for c in doc.get("chunks", [])]
+
+
+def feedback_to_doc(item: Feedback) -> dict:
+    return item.model_dump(mode="json")
+
+
+def doc_to_feedback(doc: dict) -> Feedback:
+    return Feedback(**doc)
+
+
+class FirestoreRepository:
+    """The same interface as [Repository], backed by Firestore.
+
+        users/{uid}                                  settings + profile
+        users/{uid}/recordings/{rid}                 Recording
+        users/{uid}/recordings/{rid}/chunks/all      every chunk, one document
+        users/{uid}/insights/{insight_id}
+        users/{uid}/feeds/{yyyy-mm-dd}
+        users/{uid}/feedback/{feedback_id}
+        emailIndex/{email}                           -> uid
+        otpChallenges/{email}                        pending verification
+
+    `emailIndex` and `otpChallenges` sit outside `users/` deliberately: the
+    client security rules in `firestore.rules` deny everything outside
+    `users/{uid}`, and only the Admin SDK (which bypasses rules) touches them.
+    """
+
+    _CHUNKS_DOC = "all"
+
+    def __init__(self, settings: Settings | None = None) -> None:
+        self.settings = settings or get_settings()
+        self._client = None
+
+    @property
+    def db(self):  # pragma: no cover - requires a real project
+        if self._client is None:
+            from google.cloud import firestore
+
+            self._client = firestore.Client(project=self.settings.gcp_project)
+        return self._client
+
+    # -- paths -------------------------------------------------------------
+    def _user_doc(self, uid: str):
+        return self.db.collection("users").document(uid)
+
+    def _recordings(self, uid: str):
+        return self._user_doc(uid).collection("recordings")
+
+    def _chunks_doc(self, uid: str, recording_id: str):
+        return self._recordings(uid).document(recording_id).collection("chunks").document(
+            self._CHUNKS_DOC
+        )
+
+    # -- user settings -----------------------------------------------------
+    def get_settings_doc(self, uid: str) -> UserSettings:
+        snap = self._user_doc(uid).get()
+        data = (snap.to_dict() or {}).get("settings") if snap.exists else None
+        return UserSettings(**data) if data else UserSettings()
+
+    def save_settings_doc(self, uid: str, settings: UserSettings) -> UserSettings:
+        self._user_doc(uid).set({"settings": settings.model_dump(mode="json")}, merge=True)
+        return settings
+
+    # -- profile / identity ------------------------------------------------
+    def get_profile(self, uid: str) -> UserProfile | None:
+        snap = self._user_doc(uid).get()
+        data = (snap.to_dict() or {}).get("profile") if snap.exists else None
+        return UserProfile(**data) if data else None
+
+    def save_profile(self, uid: str, profile: UserProfile) -> UserProfile:
+        self._user_doc(uid).set({"profile": profile.model_dump(mode="json")}, merge=True)
+        return profile
+
+    def uid_for_email(self, email: str) -> str | None:
+        snap = self.db.collection("emailIndex").document(normalize_email(email)).get()
+        return (snap.to_dict() or {}).get("uid") if snap.exists else None
+
+    def set_email_index(self, email: str, uid: str) -> None:
+        self.db.collection("emailIndex").document(normalize_email(email)).set({"uid": uid})
+
+    # -- OTP challenges ----------------------------------------------------
+    def get_otp(self, email: str) -> OtpChallenge | None:
+        snap = self.db.collection("otpChallenges").document(normalize_email(email)).get()
+        return OtpChallenge(**snap.to_dict()) if snap.exists else None
+
+    def save_otp(self, challenge: OtpChallenge) -> OtpChallenge:
+        self.db.collection("otpChallenges").document(normalize_email(challenge.email)).set(
+            challenge.model_dump(mode="json")
+        )
+        return challenge
+
+    def delete_otp(self, email: str) -> None:
+        self.db.collection("otpChallenges").document(normalize_email(email)).delete()
+
+    # -- recordings --------------------------------------------------------
+    def add_recording(self, rec: Recording) -> Recording:
+        self._recordings(rec.uid).document(rec.id).set(recording_to_doc(rec))
+        return rec
+
+    def get_recording(self, uid: str, recording_id: str) -> Recording | None:
+        snap = self._recordings(uid).document(recording_id).get()
+        return doc_to_recording(snap.to_dict()) if snap.exists else None
+
+    def update_recording(self, rec: Recording) -> Recording:
+        self._recordings(rec.uid).document(rec.id).set(recording_to_doc(rec))
+        return rec
+
+    def list_recordings(
+        self,
+        uid: str,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> list[Recording]:
+        items = [doc_to_recording(s.to_dict()) for s in self._recordings(uid).stream()]
+        items = [r for r in items if _in_range(r.event_date, date_from, date_to)]
+        # Sorted here rather than in Firestore: the app reads the whole list
+        # anyway, so an index buys nothing.
+        items.sort(key=lambda r: (r.event_date, r.recorded_at), reverse=True)
+        return items
+
+    def delete_recording(self, uid: str, recording_id: str) -> bool:
+        doc = self._recordings(uid).document(recording_id)
+        if not doc.get().exists:
+            return False
+        self._chunks_doc(uid, recording_id).delete()
+        doc.delete()
+        return True
+
+    # -- feedback ----------------------------------------------------------
+    def add_feedback(self, item: Feedback) -> Feedback:
+        self._user_doc(item.uid).collection("feedback").document(item.id).set(
+            feedback_to_doc(item)
+        )
+        return item
+
+    def list_feedback(self, uid: str) -> list[Feedback]:
+        items = [
+            doc_to_feedback(s.to_dict())
+            for s in self._user_doc(uid).collection("feedback").stream()
+        ]
+        items.sort(key=lambda f: f.created_at, reverse=True)
+        return items
+
+    # -- chunks / vectors --------------------------------------------------
+    def save_chunks(self, uid: str, recording_id: str, chunks: list[Chunk]) -> None:
+        self._chunks_doc(uid, recording_id).set(chunks_to_doc(chunks))
+
+    def vector_search(
+        self,
+        uid: str,
+        query_vec: list[float],
+        top_k: int,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> list[SearchHit]:
+        # Brute-force cosine over the user's own chunks — same semantics as the
+        # in-memory implementation, and no vector index to provision. Only
+        # recordings belonging to `uid` are ever read, which is the isolation
+        # boundary the RAG pipeline depends on.
+        hits: list[SearchHit] = []
+        for rec in self.list_recordings(uid, date_from=date_from, date_to=date_to):
+            for ch in doc_to_chunks(self._chunks_doc(uid, rec.id).get().to_dict()):
+                hits.append(SearchHit(ch, rec, cosine(query_vec, ch.embedding)))
+        hits.sort(key=lambda h: h.score, reverse=True)
+        return hits[:top_k]
+
+    # -- insights ----------------------------------------------------------
+    def save_insight(self, uid: str, insight: Insight) -> Insight:
+        self._user_doc(uid).collection("insights").document(insight.id).set(
+            insight.model_dump(mode="json")
+        )
+        return insight
+
+    def get_cached_insight(self, uid: str, insight_id: str) -> Insight | None:
+        snap = self._user_doc(uid).collection("insights").document(insight_id).get()
+        return Insight(**snap.to_dict()) if snap.exists else None
+
+    # -- memory feed -------------------------------------------------------
+    def save_feed(self, uid: str, feed: MemoryFeed) -> MemoryFeed:
+        self._user_doc(uid).collection("feeds").document(feed.for_date.isoformat()).set(
+            feed.model_dump(mode="json")
+        )
+        return feed
+
+    def get_feed(self, uid: str, for_date: date) -> MemoryFeed | None:
+        snap = self._user_doc(uid).collection("feeds").document(for_date.isoformat()).get()
+        return MemoryFeed(**snap.to_dict()) if snap.exists else None
+
+    # -- merge (restore after reinstall) -----------------------------------
+    def merge_user(self, src_uid: str, dst_uid: str) -> dict[str, int]:
+        """See [Repository.merge_user]. Callers must have proven both sides."""
+        if src_uid == dst_uid:
+            return {"recordings": 0, "feedback": 0, "insights": 0, "feeds": 0}
+
+        moved = {"recordings": 0, "feedback": 0, "insights": 0, "feeds": 0}
+        for rec in self.list_recordings(src_uid):
+            chunks = doc_to_chunks(self._chunks_doc(src_uid, rec.id).get().to_dict())
+            rec.uid = dst_uid  # denormalized onto the document
+            self.add_recording(rec)
+            if chunks:
+                self.save_chunks(dst_uid, rec.id, chunks)
+            self._chunks_doc(src_uid, rec.id).delete()
+            self._recordings(src_uid).document(rec.id).delete()
+            moved["recordings"] += 1
+
+        for item in self.list_feedback(src_uid):
+            src_id = item.id
+            item.uid = dst_uid
+            self.add_feedback(item)
+            self._user_doc(src_uid).collection("feedback").document(src_id).delete()
+            moved["feedback"] += 1
+
+        for snap in self._user_doc(src_uid).collection("insights").stream():
+            self.save_insight(dst_uid, Insight(**snap.to_dict()))
+            snap.reference.delete()
+            moved["insights"] += 1
+
+        # Feeds are a derived cache; drop both sides so the next read rebuilds
+        # over the combined set rather than serving a stale pre-merge answer.
+        for snap in self._user_doc(src_uid).collection("feeds").stream():
+            snap.reference.delete()
+            moved["feeds"] += 1
+        for snap in self._user_doc(dst_uid).collection("feeds").stream():
+            snap.reference.delete()
+
+        self._user_doc(src_uid).delete()
+        return moved
+
+    # -- account deletion (purge) -----------------------------------------
+    def delete_user(self, uid: str) -> None:
+        profile = self.get_profile(uid)
+        for rec in self.list_recordings(uid):
+            self._chunks_doc(uid, rec.id).delete()
+            self._recordings(uid).document(rec.id).delete()
+        for name in ("feedback", "insights", "feeds"):
+            for snap in self._user_doc(uid).collection(name).stream():
+                snap.reference.delete()
+        if profile and profile.email:
+            self.db.collection("emailIndex").document(normalize_email(profile.email)).delete()
+        self._user_doc(uid).delete()
+
+
+_repo_singleton: Repository | FirestoreRepository | None = None
+
+
+def get_repository() -> Repository | FirestoreRepository:
+    """In-memory when mocked, Firestore when a real project is configured.
+
+    Mirrors the mock/real split already used by `storage.py` and `tasks.py`.
+    """
     global _repo_singleton
     if _repo_singleton is None:
-        _repo_singleton = Repository()
+        settings = get_settings()
+        _repo_singleton = (
+            Repository(settings) if settings.effective_mock else FirestoreRepository(settings)
+        )
     return _repo_singleton
 
 
@@ -170,3 +552,9 @@ def reset_repository() -> None:
     """Test helper: drop all in-memory state."""
     global _repo_singleton
     _repo_singleton = Repository()
+
+
+def _reset_repository_choice() -> None:
+    """Test helper: forget the singleton so the next call re-picks by settings."""
+    global _repo_singleton
+    _repo_singleton = None

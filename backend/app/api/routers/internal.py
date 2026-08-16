@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 
 from fastapi import APIRouter, HTTPException, Request, status
 
-from app.pipeline.ingest import process_recording
+from app.pipeline.ingest import RecordingNotFound, process_recording
 
 router = APIRouter(prefix="/internal", tags=["internal"])
+
+log = logging.getLogger(__name__)
 
 
 @router.post("/ingest", status_code=status.HTTP_204_NO_CONTENT)
@@ -31,4 +34,10 @@ async def ingest_push(request: Request) -> None:
         raise HTTPException(status_code=400, detail=f"bad message payload: {exc}") from exc
 
     # Ack by returning 2xx. Raising would nack and trigger Pub/Sub retry.
-    process_recording(uid, recording_id)
+    try:
+        process_recording(uid, recording_id)
+    except RecordingNotFound as exc:
+        # Permanent failure: the recording is gone, so every retry will fail the
+        # same way. Nacking would leave the message redelivering until it expires,
+        # burning invocations and drowning the logs. Ack and move on.
+        log.warning("dropping unprocessable ingest message: %s", exc)

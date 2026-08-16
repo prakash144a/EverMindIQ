@@ -1,0 +1,25 @@
+Category,Terraform Resource Type,GCP Resource Name,GCP Service,Azure Equivalent,Notes
+Created,google_project_service,"run, firestore, storage, pubsub, cloudkms, secretmanager, aiplatform, firebase, artifactregistry, cloudbuild, billingbudgets, cloudresourcemanager, serviceusage (12 APIs)",Service Usage,Resource provider registration (az provider register --namespace Microsoft.App),GCP requires opting into every API per project; Azure mostly auto-registers providers
+Created,google_kms_key_ring,voiceiq,Cloud KMS,Azure Key Vault,Regional container for keys
+Created,google_kms_crypto_key,audio,Cloud KMS,Azure Key Vault key,90-day rotation period; prevent_destroy set. Azure equivalent uses an auto-rotation policy plus purge protection
+Created,google_kms_crypto_key_iam_member,GCS service agent -> roles/cloudkms.cryptoKeyEncrypterDecrypter,Cloud KMS IAM,Role assignment: Key Vault Crypto Service Encryption User,Granted to the storage account's managed identity on Azure
+Created,google_artifact_registry_repository,voiceiq (DOCKER format),Artifact Registry,Azure Container Registry (ACR),Backend container images
+Created,google_storage_bucket,voiceiq-audio-voiceiq-505205,Cloud Storage,Storage Account + blob container,See sub-settings rows below
+Created (sub-setting),uniform_bucket_level_access = true,voiceiq-audio-voiceiq-505205,Cloud Storage,Azure RBAC-only data plane access,Disables per-object ACLs
+Created (sub-setting),public_access_prevention = enforced,voiceiq-audio-voiceiq-505205,Cloud Storage,Allow blob public access = Disabled,Blocks anonymous access
+Created (sub-setting),encryption.default_kms_key_name,voiceiq-audio-voiceiq-505205,Cloud Storage + KMS,Customer-managed keys (CMK) on the storage account,CMEK for audio at rest
+Created (sub-setting),cors,voiceiq-audio-voiceiq-505205,Cloud Storage,Blob service CORS rules,PUT/GET for signed-URL uploads from mobile clients
+Created,google_firestore_database,(default) FIRESTORE_NATIVE,Firestore,Azure Cosmos DB for NoSQL (serverless),Firestore vector index maps to Cosmos DB vector search
+Created,google_pubsub_topic,voiceiq-ingest,Pub/Sub,Azure Event Grid topic,Event Grid is closest because delivery here is push; Service Bus topic if pull-based
+Created,google_pubsub_subscription,voiceiq-ingest-worker,Pub/Sub,Azure Event Grid event subscription (webhook + Entra ID token),"Push to /internal/ingest with OIDC token; ack_deadline_seconds maps to lock duration, retry_policy to Event Grid retry policy"
+Created,google_service_account,voiceiq-backend@voiceiq-505205.iam.gserviceaccount.com,IAM,User-assigned managed identity,Workload-identity flavour of an Entra service principal
+Created,google_project_iam_member,"roles/datastore.user, roles/storage.objectAdmin, roles/pubsub.publisher, roles/aiplatform.user, roles/secretmanager.secretAccessor, roles/cloudkms.cryptoKeyEncrypterDecrypter, roles/firebaseauth.viewer (7 roles)",IAM,"Role assignments: Cosmos DB Data Contributor, Storage Blob Data Contributor, Event Grid Sender, Cognitive Services User, Key Vault Secrets User, Key Vault Crypto User",Granted at project scope on GCP
+Created,google_service_account_iam_member,backend SA -> roles/iam.serviceAccountTokenCreator (on itself),IAM,No clean equivalent; nearest is the Storage Blob Delegator role,Cloud Run has no local private key so V4 signed URLs require calling the IAM signBlob API. Azure needs Blob Delegator to mint a user-delegation SAS
+Created,google_secret_manager_secret,voiceiq-app,Secret Manager,Azure Key Vault secret,Azure merges KMS and secrets into one vault; GCP splits them into two services
+Created,google_cloud_run_v2_service,voiceiq-api (scale 0-10),Cloud Run,Azure Container Apps,Container Apps is the match that also scales to zero; App Service is closer operationally but never scales to 0
+Created,google_cloud_run_v2_service_iam_member,allUsers -> roles/run.invoker,Cloud Run IAM,Container Apps external ingress with unauthenticated access,No Easy Auth in front; auth is enforced in-app via Firebase ID tokens
+Created,google_billing_budget,VoiceIQ monthly budget ($50),Cloud Billing,Azure Cost Management budget (azurerm_consumption_budget_subscription),Alerts at 10/40/80/100% actual spend plus 100% forecast spend
+"Used, not created",n/a (API only),"gemini-2.5-flash, text-multilingual-embedding-002",Vertex AI,Azure OpenAI / AI Foundry account + model deployments,"On GCP you enable the API and call it; on Azure the model deployment is an explicit resource you manage"
+"Used, not created",n/a (console config),Firebase Authentication,Firebase,Entra External ID (formerly Azure AD B2C),Enabled via firebase.googleapis.com and configured out-of-band
+Data source (lookup),data.google_project,this,Resource Manager,n/a,Reads the project number for the budget filter
+Data source (lookup),data.google_storage_project_service_account,gcs,Cloud Storage,Storage account system-assigned managed identity,Google auto-provisions this service agent; on Azure you enable the identity yourself

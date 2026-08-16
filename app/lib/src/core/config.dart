@@ -16,6 +16,13 @@ class AppConfig {
     defaultValue: 'demo-user',
   );
 
+  /// Build identifier attached to problem reports. Set in CI via
+  /// `--dart-define=APP_VERSION=1.2.3+45`.
+  static const String appVersion = String.fromEnvironment(
+    'APP_VERSION',
+    defaultValue: 'dev',
+  );
+
   /// WebSocket URL for the `/live` chat channel, authenticated with [token]
   /// (a Firebase ID token; the backend verifies it in real mode).
   static Uri wsLiveUri(String token) {

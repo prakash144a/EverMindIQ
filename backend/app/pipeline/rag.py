@@ -25,6 +25,15 @@ def answer_question(uid: str, req: ChatRequest) -> ChatResponse:
     context_blocks = [
         f"[{h.recording.event_date.isoformat()}] {h.chunk.text}" for h in hits
     ]
+
+    # No relevant memories: answer honestly instead of letting the model
+    # hallucinate moments that were never recorded.
+    if not context_blocks:
+        return ChatResponse(
+            answer="I couldn't find any memories related to that yet.",
+            citations=[],
+        )
+
     answer_language = req.answer_language or repo.get_settings_doc(uid).answer_language
     answer = get_gemini().answer(req.question, context_blocks, answer_language)
 

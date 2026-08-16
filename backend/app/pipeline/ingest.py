@@ -23,6 +23,15 @@ from app.services.storage import get_storage
 _SENTENCE_RE = re.compile(r"(?<=[.!?।])\s+")
 
 
+class RecordingNotFound(LookupError):
+    """The message names a recording that no longer exists.
+
+    Permanent, not transient — retrying can never help, so the Pub/Sub push
+    handler acks instead of nacking. Happens when a recording is deleted before
+    ingestion runs, or when a message outlives the data it referenced.
+    """
+
+
 def chunk_transcript(transcript: str, max_words: int = 60) -> list[str]:
     """Group sentences into ~max_words windows. Keeps chunks semantically coherent."""
     sentences = [s.strip() for s in _SENTENCE_RE.split(transcript.strip()) if s.strip()]
@@ -48,7 +57,7 @@ def process_recording(uid: str, recording_id: str) -> Recording:
     settings = get_settings()
     rec = repo.get_recording(uid, recording_id)
     if rec is None:
-        raise ValueError(f"recording {recording_id} not found for user {uid}")
+        raise RecordingNotFound(f"recording {recording_id} not found for user {uid}")
 
     rec.status = RecordingStatus.transcribing
     rec.updated_at = datetime.now(timezone.utc)
@@ -71,7 +80,10 @@ def process_recording(uid: str, recording_id: str) -> Recording:
         rec.people = enrich.people
         rec.places = enrich.places
         rec.mood = enrich.mood
-        rec.is_milestone = enrich.is_milestone
+        # A hand-picked star wins: Pub/Sub delivery is at-least-once, so this can
+        # re-run for a recording the user has already curated.
+        if not rec.is_milestone_manual:
+            rec.is_milestone = enrich.is_milestone
 
         # Embed the transcript (and translation, if any) for cross-lingual recall.
         embedder = get_embedder()
@@ -83,7 +95,7 @@ def process_recording(uid: str, recording_id: str) -> Recording:
             Chunk(id=uuid.uuid4().hex, text=t, embedding=v)
             for t, v in zip(texts, vectors)
         ]
-        repo.save_chunks(recording_id, chunks)
+        repo.save_chunks(uid, recording_id, chunks)
 
         rec.status = RecordingStatus.indexed
     except Exception:

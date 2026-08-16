@@ -1,14 +1,22 @@
 import 'dart:async';
-import 'dart:typed_data';
 
-import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:intl/intl.dart';
 
+import '../../core/tokens.dart';
 import '../../data/models.dart';
 import '../../data/providers.dart';
+import '../../widgets/audio_play_button.dart';
+import '../../widgets/formatting.dart';
+import '../../widgets/memory_card.dart';
+import '../../widgets/milestone_star_button.dart';
+import '../../widgets/section_header.dart';
+import '../../widgets/states.dart';
+import '../menu/milestones_screen.dart';
+import '../shell/app_shell.dart';
 
+/// Home — a warm resurfacing feed: the "On This Day" keepsake, a row of
+/// milestones, and the most recent moments.
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
@@ -18,6 +26,15 @@ class HomeScreen extends ConsumerWidget {
     final memories = ref.watch(onThisDayProvider);
     final recordings = ref.watch(recordingsProvider);
 
+    final intervalSec = settings.maybeWhen(
+      data: (s) => s.slideshowIntervalSec,
+      orElse: () => 6,
+    );
+    final showSlideshow = settings.maybeWhen(
+      data: (s) => s.onThisDayEnabled,
+      orElse: () => true,
+    );
+
     return RefreshIndicator(
       onRefresh: () async {
         ref.invalidate(onThisDayProvider);
@@ -25,27 +42,73 @@ class HomeScreen extends ConsumerWidget {
         await ref.read(recordingsProvider.future);
       },
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
+        padding: const EdgeInsets.fromLTRB(Insets.lg, Insets.md, Insets.lg, Insets.xxl),
         children: [
-          settings.maybeWhen(
-            data: (s) => s.onThisDayEnabled
-                ? memories.when(
-                    data: (items) => _OnThisDaySlideshow(items: items),
-                    loading: () => const _LoadingCard(height: 180),
-                    error: (e, _) => _ErrorCard('Could not load memories: $e'),
-                  )
-                : const SizedBox.shrink(),
-            orElse: () => const _LoadingCard(height: 180),
+          if (showSlideshow) ...[
+            memories.when(
+              data: (items) => items.isEmpty
+                  ? const _EmptyMemories()
+                  : _OnThisDaySlideshow(items: items, intervalSec: intervalSec),
+              loading: () => const AppLoadingCard(height: 190),
+              error: (e, _) => AppErrorCard('Could not load memories: $e'),
+            ),
+            const SizedBox(height: Insets.xl),
+          ],
+
+          // Milestones row
+          recordings.maybeWhen(
+            data: (recs) {
+              final milestones = recs.where((r) => r.isMilestone).toList();
+              if (milestones.isEmpty) return const SizedBox.shrink();
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SectionHeader(
+                    'Milestones',
+                    action: 'See all',
+                    onAction: () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const MilestonesScreen()),
+                    ),
+                  ),
+                  const SizedBox(height: Insets.sm),
+                  SizedBox(
+                    // 96 left the chip 1px short once its border was accounted for.
+                    height: 104,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: milestones.length,
+                      separatorBuilder: (_, __) => const SizedBox(width: Insets.md),
+                      itemBuilder: (_, i) => _MilestoneChip(milestones[i]),
+                    ),
+                  ),
+                  const SizedBox(height: Insets.xl),
+                ],
+              );
+            },
+            orElse: () => const SizedBox.shrink(),
           ),
-          const SizedBox(height: 24),
-          Text('Recent moments', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
+
+          const SectionHeader('Recent moments'),
+          const SizedBox(height: Insets.sm),
           recordings.when(
             data: (recs) => recs.isEmpty
-                ? const _EmptyState()
-                : Column(children: recs.take(10).map((r) => _RecordingTile(r)).toList()),
-            loading: () => const _LoadingCard(height: 120),
-            error: (e, _) => _ErrorCard('Could not load recordings: $e'),
+                ? AppEmptyState(
+                    icon: Icons.mic_none,
+                    title: 'No moments yet',
+                    message: 'Speak a memory and it\'s kept — in any language, any time.',
+                    actionLabel: 'Record your first memory',
+                    onAction: () => openRecordScreen(context, ref),
+                  )
+                : Column(
+                    children: [
+                      for (final r in recs.take(10)) ...[
+                        _RecordingTile(r, key: ValueKey(r.id)),
+                        const SizedBox(height: Insets.sm),
+                      ],
+                    ],
+                  ),
+            loading: () => const AppLoadingCard(height: 120),
+            error: (e, _) => AppErrorCard('Could not load recordings: $e'),
           ),
         ],
       ),
@@ -54,8 +117,9 @@ class HomeScreen extends ConsumerWidget {
 }
 
 class _OnThisDaySlideshow extends StatefulWidget {
-  const _OnThisDaySlideshow({required this.items});
+  const _OnThisDaySlideshow({required this.items, required this.intervalSec});
   final List<MemoryItem> items;
+  final int intervalSec;
 
   @override
   State<_OnThisDaySlideshow> createState() => _OnThisDaySlideshowState();
@@ -69,11 +133,28 @@ class _OnThisDaySlideshowState extends State<_OnThisDaySlideshow> {
   @override
   void initState() {
     super.initState();
+    _restartTimer();
+  }
+
+  @override
+  void didUpdateWidget(covariant _OnThisDaySlideshow old) {
+    super.didUpdateWidget(old);
+    if (old.intervalSec != widget.intervalSec || old.items.length != widget.items.length) {
+      _restartTimer();
+    }
+  }
+
+  void _restartTimer() {
+    _timer?.cancel();
     if (widget.items.length > 1) {
-      _timer = Timer.periodic(const Duration(seconds: 6), (_) {
+      // Respects the user's slideshow-interval setting.
+      _timer = Timer.periodic(Duration(seconds: widget.intervalSec.clamp(3, 30)), (_) {
         _page = (_page + 1) % widget.items.length;
-        _controller.animateToPage(_page,
-            duration: const Duration(milliseconds: 400), curve: Curves.easeInOut);
+        _controller.animateToPage(
+          _page,
+          duration: Motion.medium,
+          curve: Curves.easeInOut,
+        );
       });
     }
   }
@@ -87,228 +168,171 @@ class _OnThisDaySlideshowState extends State<_OnThisDaySlideshow> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.items.isEmpty) {
-      return const _EmptyMemories();
-    }
-    return SizedBox(
-      height: 190,
-      child: PageView.builder(
-        controller: _controller,
-        itemCount: widget.items.length,
-        onPageChanged: (i) => _page = i,
-        itemBuilder: (_, i) => _MemoryCard(widget.items[i]),
-      ),
+    return Column(
+      children: [
+        SizedBox(
+          height: 200,
+          child: PageView.builder(
+            controller: _controller,
+            itemCount: widget.items.length,
+            onPageChanged: (i) => setState(() => _page = i),
+            itemBuilder: (_, i) => MemoryCard(widget.items[i]),
+          ),
+        ),
+        if (widget.items.length > 1) ...[
+          const SizedBox(height: Insets.md),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              for (var i = 0; i < widget.items.length; i++)
+                AnimatedContainer(
+                  duration: Motion.fast,
+                  margin: const EdgeInsets.symmetric(horizontal: 3),
+                  width: i == _page ? 18 : 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    color: i == _page
+                        ? Theme.of(context).colorScheme.primary
+                        : Theme.of(context).colorScheme.outlineVariant,
+                    borderRadius: BorderRadius.circular(Radii.pill),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ],
     );
   }
 }
 
-class _MemoryCard extends StatelessWidget {
-  const _MemoryCard(this.item);
-  final MemoryItem item;
+class _MilestoneChip extends StatelessWidget {
+  const _MilestoneChip(this.rec);
+  final Recording rec;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Card(
-      color: scheme.primaryContainer,
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.auto_awesome, color: scheme.onPrimaryContainer, size: 18),
-                const SizedBox(width: 8),
-                Text(item.reason.toUpperCase(),
-                    style: TextStyle(
-                        color: scheme.onPrimaryContainer,
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 0.5)),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Text(item.title,
-                style: Theme.of(context).textTheme.titleLarge?.copyWith(color: scheme.onPrimaryContainer)),
-            const SizedBox(height: 8),
-            Expanded(
-              child: Text(item.summary,
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: scheme.onPrimaryContainer)),
-            ),
-            Text(_pretty(item.eventDate),
-                style: TextStyle(color: scheme.onPrimaryContainer.withOpacity(0.7), fontSize: 12)),
-          ],
-        ),
+    return Container(
+      width: 150,
+      padding: const EdgeInsets.all(Insets.md),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(Radii.md),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.star_rounded, color: scheme.tertiary, size: 18),
+          const Spacer(),
+          Text(
+            rec.title.isEmpty ? 'Milestone' : rec.title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            prettyDate(rec.eventDate),
+            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 11),
+          ),
+        ],
       ),
     );
   }
 }
 
 class _RecordingTile extends StatelessWidget {
-  const _RecordingTile(this.rec);
+  const _RecordingTile(this.rec, {super.key});
   final Recording rec;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      child: ListTile(
-        leading: _AudioPlayButton(recordingId: rec.id),
-        title: Text(rec.title.isEmpty ? 'Untitled moment' : rec.title,
-            maxLines: 1, overflow: TextOverflow.ellipsis),
-        subtitle: Text(
-          rec.summary.isEmpty ? _statusLabel(rec.status) : rec.summary,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-        ),
-        trailing: Column(
-          mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            if (rec.isMilestone) Icon(Icons.star, size: 16, color: scheme.primary),
-            Text(_pretty(rec.eventDate), style: const TextStyle(fontSize: 12)),
-          ],
-        ),
+    return Container(
+      padding: const EdgeInsets.all(Insets.md),
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(Radii.md),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Row(
+        children: [
+          AudioPlayButton(recordingId: rec.id),
+          const SizedBox(width: Insets.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  rec.title.isEmpty ? 'New recording' : rec.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                // Only shown until the pipeline has produced a real title.
+                if (isProcessing(rec.status)) ...[
+                  const SizedBox(height: 3),
+                  Row(
+                    children: [
+                      SizedBox(
+                        width: 10,
+                        height: 10,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 1.6,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        statusLabel(rec.status),
+                        style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ] else if (rec.status == 'failed') ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    statusLabel(rec.status),
+                    style: TextStyle(color: scheme.error, fontSize: 12),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: Insets.sm),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              MilestoneStarButton(rec),
+              Text(relativeTime(rec.recordedAt),
+                  style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant)),
+            ],
+          ),
+        ],
       ),
     );
   }
 }
 
-/// Play/pause control for a recording. Fetches the audio bytes lazily on first tap and
-/// plays them through a per-tile [AudioPlayer].
-class _AudioPlayButton extends ConsumerStatefulWidget {
-  const _AudioPlayButton({required this.recordingId});
-  final String recordingId;
-
-  @override
-  ConsumerState<_AudioPlayButton> createState() => _AudioPlayButtonState();
-}
-
-class _AudioPlayButtonState extends ConsumerState<_AudioPlayButton> {
-  final _player = AudioPlayer();
-  StreamSubscription<PlayerState>? _sub;
-  Uint8List? _bytes;
-  PlayerState _state = PlayerState.stopped;
-  bool _loading = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _sub = _player.onPlayerStateChanged.listen((s) {
-      if (mounted) setState(() => _state = s);
-    });
-  }
-
-  @override
-  void dispose() {
-    _sub?.cancel();
-    _player.dispose();
-    super.dispose();
-  }
-
-  Future<void> _toggle() async {
-    if (_state == PlayerState.playing) {
-      await _player.pause();
-      return;
-    }
-    if (_bytes != null && _state == PlayerState.paused) {
-      await _player.resume();
-      return;
-    }
-    setState(() => _loading = true);
-    try {
-      final bytes = _bytes ??=
-          await ref.read(apiClientProvider).fetchAudioBytes(widget.recordingId);
-      if (bytes.isEmpty) {
-        throw Exception('no audio yet');
-      }
-      await _player.play(BytesSource(bytes));
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not play this recording.')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final playing = _state == PlayerState.playing;
-    return IconButton.filledTonal(
-      onPressed: _loading ? null : _toggle,
-      tooltip: playing ? 'Pause' : 'Play recording',
-      icon: _loading
-          ? const SizedBox(
-              width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-          : Icon(playing ? Icons.pause : Icons.play_arrow),
-    );
-  }
-}
-
-class _EmptyState extends StatelessWidget {
-  const _EmptyState();
-  @override
-  Widget build(BuildContext context) => const Padding(
-        padding: EdgeInsets.symmetric(vertical: 32),
-        child: Column(children: [
-          Icon(Icons.mic_none, size: 48),
-          SizedBox(height: 8),
-          Text('No moments yet. Tap the mic to record your first memory.'),
-        ]),
-      );
-}
-
 class _EmptyMemories extends StatelessWidget {
   const _EmptyMemories();
   @override
-  Widget build(BuildContext context) => Card(
-        child: Container(
-          height: 120,
-          alignment: Alignment.center,
-          padding: const EdgeInsets.all(16),
-          child: const Text('Nothing resurfacing today — your future self will thank you for recording.'),
-        ),
-      );
-}
-
-class _LoadingCard extends StatelessWidget {
-  const _LoadingCard({required this.height});
-  final double height;
-  @override
-  Widget build(BuildContext context) =>
-      SizedBox(height: height, child: const Center(child: CircularProgressIndicator()));
-}
-
-class _ErrorCard extends StatelessWidget {
-  const _ErrorCard(this.message);
-  final String message;
-  @override
-  Widget build(BuildContext context) => Card(
-        color: Theme.of(context).colorScheme.errorContainer,
-        child: Padding(padding: const EdgeInsets.all(16), child: Text(message)),
-      );
-}
-
-String _statusLabel(String status) => switch (status) {
-      'uploaded' => 'Uploaded — waiting to process',
-      'transcribing' => 'Transcribing…',
-      'indexed' => 'Ready',
-      'failed' => 'Processing failed',
-      _ => status,
-    };
-
-String _pretty(String ymd) {
-  try {
-    return DateFormat.yMMMd().format(DateTime.parse(ymd));
-  } catch (_) {
-    return ymd;
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      height: 120,
+      alignment: Alignment.center,
+      padding: const EdgeInsets.all(Insets.lg),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(Radii.lg),
+      ),
+      child: Text(
+        'Nothing resurfacing today — your future self will thank you for recording.',
+        textAlign: TextAlign.center,
+        style: TextStyle(color: scheme.onSurfaceVariant),
+      ),
+    );
   }
 }

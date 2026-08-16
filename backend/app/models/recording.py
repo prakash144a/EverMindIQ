@@ -55,6 +55,8 @@ class Recording(BaseModel):
     places: list[str] = Field(default_factory=list)
     mood: str = ""
     is_milestone: bool = False
+    # Set when the user stars/unstars by hand; ingestion then leaves the flag alone.
+    is_milestone_manual: bool = False
 
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)

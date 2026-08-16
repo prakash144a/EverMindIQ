@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
 
+from app.core.media import content_type_for_path
 from app.core.security import CurrentUser, get_current_user
 from app.models.recording import Recording, RecordingCreate
 from app.services.firestore import get_repository
@@ -14,10 +16,18 @@ from app.services.tasks import enqueue_ingest
 
 router = APIRouter(prefix="/recordings", tags=["recordings"])
 
+log = logging.getLogger(__name__)
+
 
 class RecordingView(BaseModel):
     recording: dict
     audio_url: str
+
+
+class RecordingUpdate(BaseModel):
+    """Fields the user can edit after ingestion. Omitted fields are left alone."""
+
+    is_milestone: bool | None = None
 
 
 @router.post("", response_model=Recording, status_code=status.HTTP_201_CREATED)
@@ -82,8 +92,25 @@ def get_recording_audio(
     data = get_storage().read_bytes(rec.audio_path)
     if not data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio not available")
-    media_type = "audio/webm" if rec.audio_path.endswith(".webm") else "audio/mp4"
-    return Response(content=data, media_type=media_type)
+    return Response(content=data, media_type=content_type_for_path(rec.audio_path))
+
+
+@router.patch("/{recording_id}", response_model=Recording)
+def update_recording(
+    recording_id: str,
+    body: RecordingUpdate,
+    user: CurrentUser = Depends(get_current_user),
+) -> Recording:
+    """Edit a recording's user-controlled fields (currently just the milestone star)."""
+    repo = get_repository()
+    rec = repo.get_recording(user.uid, recording_id)
+    if rec is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found")
+    if body.is_milestone is not None:
+        rec.is_milestone = body.is_milestone
+        rec.is_milestone_manual = True
+    rec.updated_at = datetime.now(timezone.utc)
+    return repo.update_recording(rec)
 
 
 @router.delete("/{recording_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -91,5 +118,24 @@ def delete_recording(
     recording_id: str,
     user: CurrentUser = Depends(get_current_user),
 ) -> None:
-    if not get_repository().delete_recording(user.uid, recording_id):
+    repo = get_repository()
+    # Read the audio path before the metadata goes away — it is the only record
+    # of which blob to delete, and without this the object outlives the memory
+    # the user asked us to forget.
+    rec = repo.get_recording(user.uid, recording_id)
+    if rec is None or not repo.delete_recording(user.uid, recording_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found")
+    _delete_audio_quietly(rec.audio_path)
+
+
+def _delete_audio_quietly(audio_path: str) -> None:
+    """Best-effort blob deletion.
+
+    Metadata is deleted first, so a failure here leaves an orphaned object rather
+    than a recording whose audio 404s. Logged loudly because that orphan is both a
+    storage cost and data the user believes is gone.
+    """
+    try:
+        get_storage().delete_object(audio_path)
+    except Exception:  # pragma: no cover - real-path failure
+        log.exception("failed to delete audio object %s", audio_path)

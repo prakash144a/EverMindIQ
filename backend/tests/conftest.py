@@ -8,17 +8,26 @@ import pytest
 os.environ.setdefault("VOICEIQ_MOCK", "1")
 os.environ.pop("VOICEIQ_GCP_PROJECT", None)
 
+# Settings also read backend/.env, which on a developer machine holds real Azure
+# credentials. Blank them here — with `setdefault` these would leak through and a
+# test run would email real people. Not negotiable: overwrite, don't default.
+os.environ["VOICEIQ_ACS_CONNECTION_STRING"] = ""
+os.environ["VOICEIQ_ACS_SENDER"] = ""
+os.environ["VOICEIQ_ACS_FORCE_SEND"] = "0"
+
 
 @pytest.fixture(autouse=True)
 def _reset_state():
     """Give every test a clean in-memory repository and transcript seed registry."""
-    from app.services import firestore, gemini
+    from app.services import firestore, gemini, otp
 
     firestore.reset_repository()
     gemini._TRANSCRIPT_SEED.clear()
+    otp.clear_mock_codes()
     yield
     firestore.reset_repository()
     gemini._TRANSCRIPT_SEED.clear()
+    otp.clear_mock_codes()
 
 
 @pytest.fixture

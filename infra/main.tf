@@ -139,6 +139,15 @@ resource "google_project_iam_member" "backend_roles" {
   member  = "serviceAccount:${google_service_account.backend.email}"
 }
 
+# Let the backend sign its own V4 signed URLs via the IAM signBlob API. On
+# Cloud Run the runtime credentials have no private key, so generate_signed_url
+# must call iam.serviceAccounts.signBlob on this SA itself.
+resource "google_service_account_iam_member" "backend_token_creator" {
+  service_account_id = google_service_account.backend.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_service_account.backend.email}"
+}
+
 # --- Secret for the app config (e.g. model ids / API keys) ------------------
 resource "google_secret_manager_secret" "app" {
   secret_id = "voiceiq-app"
@@ -182,6 +191,17 @@ resource "google_cloud_run_v2_service" "api" {
       env {
         name  = "VOICEIQ_FIREBASE_PROJECT"
         value = var.project_id
+      }
+      # Model slots. Pinned to concrete GA ids that exist on Vertex in this
+      # region ("-latest" aliases 404 there). The embedder is forced to the
+      # 256-d Firestore vector index width in code.
+      env {
+        name  = "VOICEIQ_MODEL_EMBEDDING"
+        value = "text-multilingual-embedding-002"
+      }
+      env {
+        name  = "VOICEIQ_MODEL_REASONING"
+        value = "gemini-2.5-flash"
       }
     }
     scaling {

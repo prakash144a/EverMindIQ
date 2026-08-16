@@ -54,10 +54,17 @@ class Embedder:
     # -- real --------------------------------------------------------------
     def _vertex_embed(self, texts: list[str]) -> list[list[float]]:  # pragma: no cover
         from google import genai
+        from google.genai import types
 
         client = genai.Client(vertexai=True, project=self.settings.gcp_project,
                               location=self.settings.gcp_region)
-        resp = client.models.embed_content(model=self.settings.model_embedding, contents=texts)
+        # Force the output width to match the Firestore vector index (embedding_dim);
+        # multilingual-embedding-002 is 768-d by default.
+        resp = client.models.embed_content(
+            model=self.settings.model_embedding,
+            contents=texts,
+            config=types.EmbedContentConfig(output_dimensionality=self.dim),
+        )
         return [list(e.values) for e in resp.embeddings]
 
 

@@ -34,6 +34,22 @@ class Settings(BaseSettings):
     model_embedding: str = "text-multilingual-embedding-latest"
     embedding_dim: int = 256
 
+    # Email (Azure Communication Services) ----------------------------------
+    # Connection string looks like "endpoint=https://x.communication.azure.com/;accesskey=..."
+    # Keep it out of git: backend/.env locally, Secret Manager on Cloud Run.
+    acs_connection_string: str = ""
+    acs_sender: str = ""
+    # Mock mode normally suppresses sending. Set this to send for real anyway —
+    # the only way to prove delivery works without switching the whole service
+    # over to real GCP. Never enable it in tests.
+    acs_force_send: bool = False
+
+    # Sign-in codes ---------------------------------------------------------
+    otp_ttl_seconds: int = 600
+    otp_max_attempts: int = 5
+    otp_resend_cooldown_seconds: int = 60
+    otp_code_length: int = 6
+
     # Behavior --------------------------------------------------------------
     signed_url_ttl_seconds: int = 900
     rag_top_k: int = 6
@@ -43,6 +59,10 @@ class Settings(BaseSettings):
     def effective_mock(self) -> bool:
         """Force mock when no project is configured, regardless of the flag."""
         return self.mock or not self.gcp_project
+
+    @property
+    def email_configured(self) -> bool:
+        return bool(self.acs_connection_string and self.acs_sender)
 
 
 @lru_cache

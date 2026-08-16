@@ -98,6 +98,92 @@ class ApiClient {
         .toList();
   }
 
+  // -- account -----------------------------------------------------------
+
+  Future<UserProfile> getProfile() async {
+    final r = await _client.get(_u('/profile'), headers: await _headers());
+    if (r.statusCode != 200) _fail(r);
+    return UserProfile.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  Future<UserProfile> patchProfile({String? preferredName, bool? signupPromptDismissed}) async {
+    final r = await _client.patch(
+      _u('/profile'),
+      headers: await _headers(),
+      body: jsonEncode({
+        if (preferredName != null) 'preferred_name': preferredName,
+        if (signupPromptDismissed != null) 'signup_prompt_dismissed': signupPromptDismissed,
+      }),
+    );
+    if (r.statusCode != 200) _fail(r);
+    return UserProfile.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  /// Ask the backend to email a one-time code.
+  Future<void> requestOtp(String email) async {
+    final r = await _client.post(
+      _u('/auth/otp/request'),
+      headers: await _headers(),
+      body: jsonEncode({'email': email}),
+    );
+    if (r.statusCode != 204) _fail(r);
+  }
+
+  /// Verify the code. Creates the account, or restores an existing one.
+  Future<VerifyResult> verifyOtp({
+    required String email,
+    required String code,
+    String preferredName = '',
+  }) async {
+    final r = await _client.post(
+      _u('/auth/otp/verify'),
+      headers: await _headers(),
+      body: jsonEncode({
+        'email': email,
+        'code': code,
+        'preferred_name': preferredName,
+      }),
+    );
+    if (r.statusCode != 200) _fail(r);
+    return VerifyResult.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  /// Submit a problem report or suggestion. [diagnostics] carries captured error
+  /// text the user chose to attach; it is optional so a report is never blocked
+  /// on having any.
+  Future<void> submitFeedback({
+    required String kind,
+    required String message,
+    String diagnostics = '',
+    String appVersion = '',
+    String platform = '',
+  }) async {
+    final r = await _client.post(
+      _u('/feedback'),
+      headers: await _headers(),
+      body: jsonEncode({
+        'kind': kind,
+        'message': message,
+        'diagnostics': diagnostics,
+        'app_version': appVersion,
+        'platform': platform,
+      }),
+    );
+    if (r.statusCode != 201) _fail(r);
+  }
+
+  /// Star or unstar a recording. The backend records that the choice was made by
+  /// hand, so re-running ingestion won't overwrite it.
+  Future<Recording> setMilestone(String recordingId, bool value) async {
+    final r = await _client.patch(
+      _u('/recordings/$recordingId'),
+      headers: await _headers(),
+      body: jsonEncode({'is_milestone': value}),
+    );
+    if (r.statusCode != 200) _fail(r);
+    return Recording.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
   /// Raw audio bytes for a recording, for in-app playback. Served behind auth by the backend.
   Future<Uint8List> fetchAudioBytes(String recordingId) async {
     final r = await _client.get(_u('/recordings/$recordingId/audio'),
