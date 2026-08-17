@@ -3,8 +3,8 @@
 A living tracker for every phase and major work item. Update the status boxes as work lands.
 Aligns with the phased delivery in [architecture.md §8](./architecture.md).
 
-**Last updated:** 2026-08-17 (admin console live at `memoriesiq-admin.web.app`; backend deployed;
-Firestore indexes deployable for the first time; CI lint gate fixed)
+**Last updated:** 2026-08-17 (admin console live; backend `api:v10` deployed; CI green for the
+first time; committed as `f4f95f2`)
 
 ## Status legend
 
@@ -12,12 +12,44 @@ Firestore indexes deployable for the first time; CI lint gate fixed)
 - `[~]` 🟡 Partial — works in **mock mode**, but the real/cloud path is stubbed (`# pragma: no cover`) and unexercised, or only part of the scope is done
 - `[ ]` ⬜ Not started
 
-> **Big-picture state:** the core loop is **real**. As of 2026-08-16 a recording goes from a signed
-> upload into the CMEK bucket, through Pub/Sub to real Gemini transcription and enrichment, into
-> Vertex embeddings and Firestore, and comes back out of a RAG query with a citation — against live
-> GCP, in under 10 seconds. Mock mode remains the offline/test path. What's left is not "make the
-> cloud path work" any more; it's release readiness (Android signing, CI deploy automation), the
-> Phase 2 features that were only ever mocked, and the deferred cost work in Phase 4.
+> **Big-picture state:** the core loop is **real** and there is now an **operator plane** over it. A
+> recording goes from a signed upload into the CMEK bucket, through Pub/Sub to real Gemini
+> transcription and enrichment, into Vertex embeddings and Firestore, and back out of a RAG query
+> with a citation — against live GCP, in under 10 seconds. An admin console reports who is using it.
+> Mock mode remains the offline/test path. What's left is release readiness (Play listing, app
+> signing, CI deploy automation), the Phase 2 features that were only ever mocked, and the deferred
+> cost work in Phase 4.
+
+## What is live right now
+
+| | |
+|---|---|
+| API | `https://voiceiq-api-fv2se2zeza-uc.a.run.app` — image `api:v10`, real mode |
+| Admin console | `https://memoriesiq-admin.web.app` — allowlisted Google sign-in |
+| Marketing site | target `memoriesiq-site` created, **nothing published yet** (see 3.5) |
+| GCP / Firebase | project `voiceiq-505205`, region `us-central1` |
+| Android package | `com.memoriesiq.app` (registered in Firebase; the old `com.example.voiceiq` app still exists and can be deleted once a build is confirmed) |
+| CI | green on `f4f95f2` — backend, app, admin all pass; `deploy` skipped (gated on `DEPLOY_ENABLED`) |
+| Tests | 227 backend, 51 app, `ruff check app tests` clean, `tsc --noEmit` clean |
+
+> **Before running Terraform in a fresh clone:** `infra/secrets.auto.tfvars` is **gitignored** and
+> must be recreated — it holds `billing_account` and `admin_emails`. Without it `apply` prompts for
+> the billing account and the admin allowlist is empty, which locks everyone out of `/admin` by
+> design. See [`infra/README.md`](../infra/README.md).
+
+## Next session — start here
+
+Ordered by what unblocks the most. (1) → (2) is the only real dependency; the rest are independent.
+
+1. **Publish the marketing site** — Phase 3.5. Legal copy is complete; two values need a lawyer's
+   sign-off first (governing jurisdiction, liability cap). One command once confirmed. Do this first
+   because it produces the privacy-policy URL the Play listing requires.
+2. **Play Store readiness** — Cross-cutting. App signing is still debug keys. This is the real
+   blocker to shipping the app at all, and it needs the URL from (1).
+3. **Verify cross-lingual recall** — Cross-cutting. The load-bearing unverified assumption for the
+   target users; needs one real non-English recording through the live pipeline.
+4. **Automate deploys in CI** — Phase 0. Every deploy so far has been manual.
+5. **Decide what premium unlocks** — Phase 3.5, product decision, currently a no-op label.
 
 ---
 
@@ -36,11 +68,13 @@ Firestore indexes deployable for the first time; CI lint gate fixed)
 - [x] **First real backend deploy** — image `…/voiceiq/api:v1` built via Cloud Build and deployed to
   Cloud Run (drift-free via `container_image` in tfvars). Live at
   `https://voiceiq-api-fv2se2zeza-uc.a.run.app` in real mode; `/docs` + auth verified.
-- [ ] Automate deploy in CI — Workload Identity Federation + repo vars/secrets (`DEPLOY_ENABLED`, etc.)
-  so pushes to `main` redeploy (today's deploy was manual)
-- [x] Firebase setup — project added to Firebase, Android app `com.example.voiceiq` registered,
-  `google-services.json` + `firebase_options.dart` generated, **Anonymous provider enabled**, backend
-  SA granted `firebaseauth.viewer`. App Check: later.
+- [ ] Automate deploy in CI — Workload Identity Federation + repo vars/secrets (`DEPLOY_ENABLED`,
+  `GCP_PROJECT_ID`, `GCP_REGION`, `GCP_WIF_PROVIDER`, `GCP_DEPLOY_SA`, plus the `FIREBASE_WEB_*` vars
+  the admin build needs) so pushes to `main` redeploy. Every deploy to date has been manual. The job
+  itself is written and has never run — worth a dry run on a throwaway branch before trusting it
+- [x] Firebase setup — project added to Firebase; Android app **`com.memoriesiq.app`** and a **web**
+  app registered; `google-services.json` + `firebase_options.dart` generated; **Anonymous and Google
+  providers enabled**; backend SA granted `firebaseauth.viewer`. App Check: later.
 
 ## Phase 1 — MVP
 
@@ -88,8 +122,10 @@ Firestore indexes deployable for the first time; CI lint gate fixed)
   single source. VoiceIQ deliberately stays as the internal name for the backend, the `VOICEIQ_` env
   prefix, the Dart package, and every GCP resource
 - [x] **Android application id** → `com.memoriesiq.app` (was `com.example.voiceiq`, which the Play
-  Store rejects outright). **Blocked on a manual step**: the new package must be registered in the
-  Firebase console and `google-services.json` regenerated, or the Android build fails
+  Store rejects outright). The package is registered in Firebase and `google-services.json` +
+  `firebase_options.dart` are regenerated. Note `flutterfire configure` **crashes** on this project —
+  it resolves to CLI 0.1.1+2, which casts the web app's absent `measurementId` to a non-nullable
+  String, and 1.x won't resolve (`pub_updater ^0.5.0`). Use `firebase apps:sdkconfig` instead
 - [x] **Admin console** (`admin/`) — React + Vite SPA: overview with charts, paginated/searchable
   people list, per-account detail, device view, cross-user feedback inbox with triage, pipeline
   health, and an admin audit log
@@ -105,7 +141,7 @@ Firestore indexes deployable for the first time; CI lint gate fixed)
 - [x] **Premium/free tier** — admin-set flag with an audit trail. A label, not an entitlement:
   nothing in the app enforces a limit yet
 - [x] **Marketing site** (`site/`) — static HTML for ad traffic, plus the privacy policy the Play
-  listing requires. **Placeholders still to fill**: legal entity, address, contact, jurisdiction
+  listing requires. Legal copy complete: NATIVE MINDS AI LABS, WA, USA, `info@nativemindsai.com`
 - [x] **Firebase Hosting** — two targets (`site`, `admin`) in `firebase.json` + `.firebaserc`;
   `firebasehosting.googleapis.com` enabled in Terraform
 - [x] **Firebase web app registered + Google sign-in enabled**; admin console deployed to
@@ -113,9 +149,12 @@ Firestore indexes deployable for the first time; CI lint gate fixed)
 - [x] ~~Run the stats backfill~~ — **not required.** The script
   (`backend/scripts/backfill_user_stats.py`) is kept for the case where pre-`userStats` accounts ever
   need reconstructing, but the existing accounts are throwaway test identities not worth importing
-- [ ] **Publish the marketing site** — legal pages are filled in
-  (NATIVE MINDS AI LABS); the governing jurisdiction and the US$100 liability cap were inferred from
-  the registered address and want a lawyer's confirmation before the site takes ad traffic
+- [ ] **Publish the marketing site** — `firebase deploy --only hosting:site --project voiceiq-505205`.
+  Held back deliberately: two values in `site/terms.html` were *inferred*, not given — the governing
+  jurisdiction (**State of Washington**, from the registered address) and the liability cap
+  (**US$100**, a floor because the app is free, so "the amount you paid us" is $0; a literal $0 cap
+  can be void as illusory in some jurisdictions and would take the whole clause with it). Both want a
+  lawyer's confirmation before the site takes paid traffic
 - [ ] **Decide what premium actually unlocks** — deferred; the toggle exists, is audited, and
   currently changes nothing for the user
 
@@ -164,7 +203,10 @@ Firestore indexes deployable for the first time; CI lint gate fixed)
 
 ## Cross-cutting / near-term cleanups
 
-- [ ] Android **release** readiness: HTTPS backend, app signing, real app id + icon (currently `com.example.voiceiq`; cleartext is debug-only)
+- [ ] Android **release** readiness — the real blocker to shipping. Done: HTTPS backend, a Play-legal
+  application id (`com.memoriesiq.app`), launcher label. **Outstanding: app signing** (release builds
+  still use the debug keystore, per `app/android/app/build.gradle.kts`), a real launcher icon, and
+  the Play listing itself, which needs the privacy-policy URL from the marketing site
 - [ ] Revisit the `record` dependency: the `record_linux: 1.3.1` override unblocks the build — consider bumping `record` to its aligned 6.x line instead
 - [x] **Real-mode end-to-end verification pass** (2026-08-16) — record → GCS/CMEK → Pub/Sub → Gemini →
   embeddings → Firestore → RAG recall, all exercised against live GCP with a real Firebase anonymous
@@ -195,9 +237,19 @@ Firestore indexes deployable for the first time; CI lint gate fixed)
   `Access-Control-Allow-Origin`, which a browser cannot read. The admin console showed a network
   error while the real cause (a missing index) sat in the logs. Errors are now converted to JSON
   inside the CORS layer (`app/main.py`), covered by `tests/test_error_responses.py`
+- [x] **Secrets split out of the public repo** — the GitHub repository is **public**, and
+  `infra/terraform.tfvars` was about to gain `admin_emails`, which names the exact account worth
+  attacking to reach the console. `billing_account` and `admin_emails` now live in a gitignored
+  `infra/secrets.auto.tfvars` (Terraform auto-loads it; `plan` confirms no drift). Also gitignored:
+  `infra/tfplan` (a saved plan embeds every resolved variable value) and `.firebase/` deploy caches.
+  **Note the billing account remains in git history** from an earlier commit — not directly
+  exploitable without IAM access, but it is public
 - [ ] Cross-lingual recall unverified — the multilingual embedder is the load-bearing choice for the
   target users (Tamil/Hindi memories, English questions) and has never been tested with non-English
   audio. Needs a real non-English recording through the live pipeline
+- [ ] Restrict the Firebase **web** API key — now committed and public (normal for Firebase, which
+  treats it as a client identifier), but it should carry HTTP-referrer restrictions in the GCP
+  console so it only works from the console's own origin
 
 ---
 
@@ -211,7 +263,7 @@ Firestore indexes deployable for the first time; CI lint gate fixed)
 | 3 — Scale & polish | 0 | 1 | 5 |
 | 3.5 — Operations & launch | 11 | 0 | 2 |
 | 4 — Cost optimization | 0 | 0 | 7 |
-| Cross-cutting | 6 | 0 | 3 |
+| Cross-cutting | 7 | 0 | 4 |
 
 ## Maintaining this doc
 

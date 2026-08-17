@@ -151,3 +151,9 @@ email is the durable identifier and `previous_uids` preserves the lineage.
 - **Phase 1 (MVP)** — record + back-date, encrypted upload, ingestion, calendar, Talk-to-AI (text→voice), auth.
 - **Phase 2** — On This Day, insights drawer, push, entity extraction/search.
 - **Phase 3** — Vertex Vector Search migration, milestones, export, tuning, optional E2E tier.
+- **Phase 3.5** — operations & launch surface: admin console, marketing site, product rename,
+  device/account tracking, tier flag.
+- **Phase 4** — cost optimization, deliberately deferred until there is real traffic to measure.
+
+Current status per item lives in [milestones.md](./milestones.md), which is the tracker; this file
+describes the design.
