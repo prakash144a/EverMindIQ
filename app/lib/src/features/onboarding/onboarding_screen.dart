@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/tokens.dart';
 
-/// "How it works" — a short, warm explainer of the three things VoiceIQ does.
+/// "How it works" — a short, warm explainer of the three things MemoriesIQ does.
 /// Reachable from the menu; also suitable as a first-run intro.
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
@@ -24,7 +24,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     (
       _SlideArt.recall,
       'Talk to your memories',
-      'Tap Recall and ask out loud. VoiceIQ finds the moments that answer you, and reads them back.',
+      'Tap Recall and ask out loud. MemoriesIQ finds the moments that answer you, and reads them back.',
     ),
     (
       _SlideArt.resurface,

@@ -1,11 +1,11 @@
 {
-    "name": "voiceiq",
-    "short_name": "voiceiq",
+    "name": "MemoriesIQ",
+    "short_name": "MemoriesIQ",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "Capture life moments by voice and talk to an AI that remembers.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

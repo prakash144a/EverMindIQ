@@ -4,6 +4,13 @@
 *.tfstate.*
 crash.log
 crash.*.log
+# Saved plans embed the resolved variable values — including the billing
+# account — and are throwaway artifacts of a single apply.
+tfplan
+*.tfplan
+# The repository is public. Secrets live in *.auto.tfvars, which Terraform
+# loads automatically; terraform.tfvars stays committed for everything else.
+*.auto.tfvars
 override.tf
 override.tf.json
 *_override.tf

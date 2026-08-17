@@ -15,8 +15,8 @@ log = logging.getLogger(__name__)
 
 @router.delete("", status_code=status.HTTP_204_NO_CONTENT)
 def delete_account(user: CurrentUser = Depends(get_current_user)) -> None:
-    """Purge all of the user's data: recordings, chunks/vectors, insights, feeds, feedback, settings,
-    and every audio object under the user's storage prefix.
+    """Purge all of the user's data: recordings, chunks/vectors, insights, feeds,
+    feedback, settings, and every audio object under the user's storage prefix.
     """
     get_repository().delete_user(user.uid)
     # By prefix rather than per recording: the metadata is already gone by now,

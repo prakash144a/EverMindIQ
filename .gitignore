@@ -230,3 +230,20 @@ backend/.venv/
 backend/wheelhouse/
 # JetBrains / Android Studio IDE settings — local, not part of the project.
 .idea/
+
+# The Python template's `/site` (mkdocs build output) would swallow the whole
+# marketing site — same class of trap as `lib/` above, and just as silent.
+!/site
+!/site/**
+
+# Firebase CLI deploy caches — local hashes used to skip re-uploading unchanged
+# files. Machine-specific and regenerated on every deploy.
+.firebase/
+
+# --- JavaScript (admin console) ---
+# The Python template above ignores `lib/`, `build/` and `dist/` repo-wide, which
+# is why `app/lib/` needed rescuing. `dist/` staying ignored is what we want for
+# build output — but node_modules was never covered by any rule, so it needs one.
+node_modules/
+admin/.env.local
+admin/.env.*.local

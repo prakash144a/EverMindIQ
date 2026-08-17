@@ -6,7 +6,7 @@ here (resolved against the API base), and we stash them so the ingestion worker 
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 
 from app.services.storage import get_storage
 

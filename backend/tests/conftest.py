@@ -15,19 +15,32 @@ os.environ["VOICEIQ_ACS_CONNECTION_STRING"] = ""
 os.environ["VOICEIQ_ACS_SENDER"] = ""
 os.environ["VOICEIQ_ACS_FORCE_SEND"] = "0"
 
+# One allowlisted admin for the whole suite. Deliberately a uid nothing else
+# uses, so every other `auth(...)` caller is a genuine non-admin and the
+# rejection tests are testing something real.
+ADMIN_UID = "root-admin"
+os.environ["VOICEIQ_ADMIN_UIDS"] = ADMIN_UID
+os.environ["VOICEIQ_ADMIN_EMAILS"] = ""
+
 
 @pytest.fixture(autouse=True)
 def _reset_state():
     """Give every test a clean in-memory repository and transcript seed registry."""
+    from app.core import activity
     from app.services import firestore, gemini, otp
 
     firestore.reset_repository()
     gemini._TRANSCRIPT_SEED.clear()
     otp.clear_mock_codes()
+    # The activity cache is process-global and deliberately suppresses repeat
+    # writes; leaving it populated would silently skip the write the next test
+    # is asserting on.
+    activity.reset_activity_cache()
     yield
     firestore.reset_repository()
     gemini._TRANSCRIPT_SEED.clear()
     otp.clear_mock_codes()
+    activity.reset_activity_cache()
 
 
 @pytest.fixture
@@ -42,6 +55,11 @@ def client():
 def auth(uid: str) -> dict:
     """Auth headers for `uid` (mock mode treats the bearer token as the uid)."""
     return {"Authorization": f"Bearer {uid}"}
+
+
+def admin_auth() -> dict:
+    """Auth headers for the allowlisted admin."""
+    return auth(ADMIN_UID)
 
 
 @pytest.fixture

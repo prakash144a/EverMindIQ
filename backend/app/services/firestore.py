@@ -4,20 +4,38 @@ Mock mode keeps everything in a process-wide in-memory store (shared by the API 
 worker) and implements vector search by brute-force cosine similarity. Real mode maps the same
 operations onto Firestore documents under ``users/{uid}/...`` with Firestore Vector Search.
 
-Every method is scoped by ``uid`` — the isolation boundary that mirrors the Firestore security rules.
+Every method is scoped by ``uid`` — the isolation boundary that mirrors the Firestore security
+rules. The exception is the admin plane at the bottom, which reads across users and lives in
+top-level collections no client can reach.
 """
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from threading import RLock
+from typing import Callable, TypeVar
 
 from app.core.config import Settings, get_settings
+from app.models.admin import (
+    AdminAuditEntry,
+    DailyStats,
+    DeviceAccount,
+    DeviceInfo,
+    FeedbackTriage,
+)
 from app.models.feedback import Feedback
-from app.models.insight import Insight, InsightRange
+from app.models.insight import Insight
 from app.models.memory import MemoryFeed
-from app.models.recording import Chunk, Recording
-from app.models.user import OtpChallenge, UserProfile, UserSettings, normalize_email
+from app.models.recording import Chunk, Recording, RecordingStatus
+from app.models.user import (
+    OtpChallenge,
+    UserProfile,
+    UserSettings,
+    UserStats,
+    UserTier,
+    normalize_email,
+)
+from app.services import stats as stats_ops
 from app.services.embedding import cosine
 
 
@@ -52,6 +70,18 @@ class Repository:
         self._email_index: dict[str, str] = {}
         # normalized email -> pending OTP
         self._otps: dict[str, OtpChallenge] = {}
+        # -- admin plane (mirrors the top-level Firestore collections) ------
+        # uid -> stats
+        self._stats: dict[str, UserStats] = {}
+        # install_id -> device
+        self._devices: dict[str, DeviceInfo] = {}
+        # install_id -> {uid -> account}
+        self._device_accounts: dict[str, dict[str, DeviceAccount]] = {}
+        # yyyy-mm-dd -> rollup
+        self._daily: dict[str, DailyStats] = {}
+        # feedback_id -> triage
+        self._triage: dict[str, FeedbackTriage] = {}
+        self._audit: list[AdminAuditEntry] = []
 
     # -- user settings -----------------------------------------------------
     def get_settings_doc(self, uid: str) -> UserSettings:
@@ -189,6 +219,280 @@ class Repository:
         with self._lock:
             return self._feeds.get(uid, {}).get(for_date.isoformat())
 
+    # ==================================================================
+    # Admin plane
+    # ==================================================================
+    def get_user_stats(self, uid: str) -> UserStats | None:
+        with self._lock:
+            return self._stats.get(uid)
+
+    def save_user_stats(self, stats: UserStats) -> UserStats:
+        with self._lock:
+            self._stats[stats.uid] = stats
+            return stats
+
+    def ensure_user_stats(self, uid: str) -> tuple[UserStats, bool]:
+        """Return (stats, created). Creating on first sight is what guarantees
+        every active account is listable — see `touch_activity`."""
+        with self._lock:
+            existing = self._stats.get(uid)
+            if existing is not None:
+                return existing, False
+            created = stats_ops.new_stats(uid)
+            self._stats[uid] = created
+            return created, True
+
+    def touch_activity(
+        self, uid: str, install_id: str, platform: str, app_version: str
+    ) -> tuple[bool, bool]:
+        """Record activity. Returns (is_new_user, is_first_activity_today)."""
+        with self._lock:
+            stats, created = self.ensure_user_stats(uid)
+            new_day = stats_ops.apply_activity(stats, install_id, platform, app_version)
+            self._stats[uid] = stats
+            if install_id:
+                self._link_device(uid, install_id, platform, app_version, stats)
+            return created, (created or new_day)
+
+    def _link_device(
+        self,
+        uid: str,
+        install_id: str,
+        platform: str,
+        app_version: str,
+        stats: UserStats,
+    ) -> None:
+        """Associate an account with a device. Caller holds the lock."""
+        now = datetime.now(timezone.utc)
+        device = self._devices.get(install_id)
+        if device is None:
+            device = DeviceInfo(install_id=install_id, first_seen_at=now, last_seen_at=now)
+        device.last_seen_at = now
+        if platform:
+            device.platform = platform
+        if app_version:
+            device.app_version = app_version
+
+        accounts = self._device_accounts.setdefault(install_id, {})
+        account = accounts.get(uid)
+        if account is None:
+            account = DeviceAccount(uid=uid, install_id=install_id, first_seen_at=now)
+        account.last_seen_at = now
+        account.email = stats.email
+        account.preferred_name = stats.preferred_name
+        accounts[uid] = account
+
+        device.account_count = len(accounts)
+        self._devices[install_id] = device
+
+    def record_created(self, uid: str, duration_sec: float, recorded_at: datetime) -> UserStats:
+        with self._lock:
+            stats, _ = self.ensure_user_stats(uid)
+            stats_ops.apply_recording_created(stats, duration_sec, recorded_at)
+            self._stats[uid] = stats
+            return stats
+
+    def record_deleted(self, uid: str, duration_sec: float) -> UserStats | None:
+        with self._lock:
+            stats = self._stats.get(uid)
+            if stats is None:
+                return None
+            stats_ops.apply_recording_deleted(stats, duration_sec)
+            self._stats[uid] = stats
+            return stats
+
+    def bump_feedback_count(self, uid: str) -> None:
+        with self._lock:
+            stats, _ = self.ensure_user_stats(uid)
+            stats.feedback_count += 1
+            self._stats[uid] = stats
+
+    def sync_user_identity(
+        self, uid: str, preferred_name: str, email: str, email_verified: bool
+    ) -> UserStats:
+        with self._lock:
+            stats, _ = self.ensure_user_stats(uid)
+            stats_ops.apply_identity(stats, preferred_name, email, email_verified)
+            self._stats[uid] = stats
+            # Keep the device rows readable: they show the account's name/email.
+            for accounts in self._device_accounts.values():
+                if uid in accounts:
+                    accounts[uid].email = email
+                    accounts[uid].preferred_name = preferred_name
+            return stats
+
+    def set_tier(
+        self, uid: str, tier: UserTier | None, note: str | None, admin_uid: str
+    ) -> UserStats | None:
+        with self._lock:
+            stats = self._stats.get(uid)
+            if stats is None:
+                return None
+            stats_ops.apply_tier(stats, tier, note, admin_uid)
+            self._stats[uid] = stats
+            return stats
+
+    def recompute_user_stats(self, uid: str) -> UserStats | None:
+        with self._lock:
+            stats = self._stats.get(uid)
+            if stats is None:
+                return None
+            recordings = list(self._recordings.get(uid, {}).values())
+            feedback_count = len(self._feedback.get(uid, {}))
+            stats_ops.recompute(stats, recordings, feedback_count)
+            self._stats[uid] = stats
+            return stats
+
+    def list_user_stats(
+        self,
+        sort: str = "last_active_at",
+        order: str = "desc",
+        limit: int = 50,
+        cursor: str | None = None,
+        tier: str | None = None,
+        platform: str | None = None,
+        query: str | None = None,
+    ) -> tuple[list[UserStats], str | None]:
+        with self._lock:
+            rows = list(self._stats.values())
+        rows = [r for r in rows if _stats_matches(r, tier, platform, query)]
+        rows.sort(key=lambda s: (_sort_key(s, sort), s.uid), reverse=(order == "desc"))
+        return _paginate(rows, limit, cursor, lambda s: s.uid)
+
+    def count_user_stats(
+        self, tier: str | None = None, active_since: datetime | None = None
+    ) -> int:
+        with self._lock:
+            rows = list(self._stats.values())
+        return sum(
+            1
+            for r in rows
+            if (tier is None or r.tier.value == tier)
+            and (active_since is None or r.last_active_at >= active_since)
+        )
+
+    def global_summary(self) -> dict:
+        with self._lock:
+            rows = list(self._stats.values())
+            devices = list(self._devices.values())
+            failed = sum(
+                1
+                for recs in self._recordings.values()
+                for r in recs.values()
+                if r.status == RecordingStatus.failed
+            )
+        now = datetime.now(timezone.utc)
+        return {
+            "users_total": len(rows),
+            "users_premium": sum(1 for r in rows if r.tier == UserTier.premium),
+            "users_with_email": sum(1 for r in rows if r.email),
+            "users_anonymous": sum(1 for r in rows if not r.email),
+            "recordings_total": sum(r.recordings_count for r in rows),
+            "total_duration_sec": round(sum(r.total_duration_sec for r in rows), 3),
+            "max_duration_sec": max((r.max_duration_sec for r in rows), default=0.0),
+            "devices_total": len(devices),
+            "multi_account_devices": sum(1 for d in devices if d.account_count > 1),
+            "active_1d": _active_since(rows, now - timedelta(days=1)),
+            "active_7d": _active_since(rows, now - timedelta(days=7)),
+            "active_30d": _active_since(rows, now - timedelta(days=30)),
+            "feedback_total": sum(r.feedback_count for r in rows),
+            "failed_recordings": failed,
+        }
+
+    # -- devices -----------------------------------------------------------
+    def get_device(self, install_id: str) -> DeviceInfo | None:
+        with self._lock:
+            return self._devices.get(install_id)
+
+    def list_devices(
+        self, limit: int = 50, cursor: str | None = None
+    ) -> tuple[list[DeviceInfo], str | None]:
+        with self._lock:
+            rows = list(self._devices.values())
+        rows.sort(key=lambda d: (d.last_seen_at, d.install_id), reverse=True)
+        return _paginate(rows, limit, cursor, lambda d: d.install_id)
+
+    def list_device_accounts(self, install_id: str) -> list[DeviceAccount]:
+        with self._lock:
+            accounts = list(self._device_accounts.get(install_id, {}).values())
+        accounts.sort(key=lambda a: a.last_seen_at, reverse=True)
+        return accounts
+
+    def list_devices_for_user(self, uid: str) -> list[DeviceInfo]:
+        with self._lock:
+            ids = [i for i, accts in self._device_accounts.items() if uid in accts]
+            devices = [self._devices[i] for i in ids if i in self._devices]
+        devices.sort(key=lambda d: d.last_seen_at, reverse=True)
+        return devices
+
+    # -- daily rollups -----------------------------------------------------
+    def bump_daily(
+        self, day: date, field: str, amount: float = 1, bucket: str | None = None
+    ) -> DailyStats:
+        with self._lock:
+            key = day.isoformat()
+            entry = self._daily.get(key) or DailyStats(day=day)
+            if bucket is not None:
+                entry.duration_buckets[bucket] = entry.duration_buckets.get(bucket, 0) + int(amount)
+            else:
+                setattr(entry, field, getattr(entry, field) + amount)
+            self._daily[key] = entry
+            return entry
+
+    def list_daily(self, date_from: date, date_to: date) -> list[DailyStats]:
+        with self._lock:
+            rows = [d for d in self._daily.values() if date_from <= d.day <= date_to]
+        rows.sort(key=lambda d: d.day)
+        return rows
+
+    # -- feedback triage ---------------------------------------------------
+    def list_all_feedback(
+        self,
+        limit: int = 50,
+        cursor: str | None = None,
+        kind: str | None = None,
+        platform: str | None = None,
+    ) -> tuple[list[Feedback], str | None]:
+        with self._lock:
+            rows = [f for items in self._feedback.values() for f in items.values()]
+        if kind:
+            rows = [f for f in rows if f.kind.value == kind]
+        if platform:
+            rows = [f for f in rows if f.platform == platform]
+        rows.sort(key=lambda f: (f.created_at, f.id), reverse=True)
+        return _paginate(rows, limit, cursor, lambda f: f.id)
+
+    def get_triage(self, feedback_id: str) -> FeedbackTriage | None:
+        with self._lock:
+            return self._triage.get(feedback_id)
+
+    def save_triage(self, triage: FeedbackTriage) -> FeedbackTriage:
+        with self._lock:
+            self._triage[triage.feedback_id] = triage
+            return triage
+
+    # -- pipeline health ---------------------------------------------------
+    def list_failed_recordings(self, limit: int = 50) -> list[Recording]:
+        with self._lock:
+            rows = [
+                r
+                for recs in self._recordings.values()
+                for r in recs.values()
+                if r.status in (RecordingStatus.failed, RecordingStatus.transcribing)
+            ]
+        rows.sort(key=lambda r: r.updated_at, reverse=True)
+        return rows[:limit]
+
+    # -- audit -------------------------------------------------------------
+    def add_audit(self, entry: AdminAuditEntry) -> AdminAuditEntry:
+        with self._lock:
+            self._audit.append(entry)
+            return entry
+
+    def list_audit(self, limit: int = 100) -> list[AdminAuditEntry]:
+        with self._lock:
+            return sorted(self._audit, key=lambda e: e.at, reverse=True)[:limit]
+
     # -- merge (restore after reinstall) -----------------------------------
     def merge_user(self, src_uid: str, dst_uid: str) -> dict[str, int]:
         """Move everything owned by `src_uid` onto `dst_uid`; return what moved.
@@ -224,6 +528,16 @@ class Repository:
 
             self._users.pop(src_uid, None)
             self._profiles.pop(src_uid, None)
+
+            # Fold the account's history onto the session that now owns it. See
+            # `stats.merge_stats` for why the direction matters so much.
+            src_stats = self._stats.pop(src_uid, None)
+            if src_stats is not None:
+                dst_stats, _ = self.ensure_user_stats(dst_uid)
+                self._stats[dst_uid] = stats_ops.merge_stats(src_stats, dst_stats)
+            for accounts in self._device_accounts.values():
+                accounts.pop(src_uid, None)
+            self._refresh_device_counts()
         # Chunks are keyed by recording id, which is preserved, so they follow.
         return {
             "recordings": len(moved_recs),
@@ -245,6 +559,91 @@ class Repository:
             profile = self._profiles.pop(uid, None)
             if profile and profile.email:
                 self._email_index.pop(normalize_email(profile.email), None)
+            # The install id is stored here and on the device link, and nowhere
+            # else — deleting both is what makes it genuinely deletable.
+            self._stats.pop(uid, None)
+            for accounts in self._device_accounts.values():
+                accounts.pop(uid, None)
+            self._refresh_device_counts()
+
+    def _refresh_device_counts(self) -> None:
+        """Recount accounts per device, and drop devices nobody uses. Caller holds the lock."""
+        for install_id, accounts in list(self._device_accounts.items()):
+            if not accounts:
+                self._device_accounts.pop(install_id, None)
+                self._devices.pop(install_id, None)
+                continue
+            device = self._devices.get(install_id)
+            if device is not None:
+                device.account_count = len(accounts)
+
+
+_T = TypeVar("_T")
+
+# The highest private-use code point. Firestore has no "starts with" operator,
+# so a prefix search is expressed as the range [q, q + PREFIX_END). Spelled as
+# an escape rather than the literal character, which is invisible in an editor.
+PREFIX_END = "\uf8ff"
+
+# Fields the admin user list may sort by. Constrained because each one needs a
+# matching Firestore index; an unbounded sort param would 500 in production
+# against a query no index supports.
+SORTABLE = (
+    "last_active_at",
+    "created_at",
+    "recordings_count",
+    "total_duration_sec",
+    "max_duration_sec",
+    "email",
+)
+
+
+def _sort_key(stats: UserStats, sort: str):
+    if sort not in SORTABLE:
+        sort = "last_active_at"
+    return getattr(stats, sort)
+
+
+def _stats_matches(
+    stats: UserStats, tier: str | None, platform: str | None, query: str | None
+) -> bool:
+    if tier and stats.tier.value != tier:
+        return False
+    if platform and stats.platform != platform:
+        return False
+    if query:
+        # Prefix, not substring: Firestore can do `>= q AND < q + ` with an
+        # index, and cannot do substring search at any price. Matching the real
+        # backend's capability here keeps the mock honest.
+        q = query.strip().lower()
+        haystacks = (stats.email.lower(), stats.preferred_name_lower, stats.uid.lower())
+        if not any(h.startswith(q) for h in haystacks):
+            return False
+    return True
+
+
+def _paginate(
+    rows: list[_T], limit: int, cursor: str | None, key: Callable[[_T], str]
+) -> tuple[list[_T], str | None]:
+    """Slice `rows` after `cursor`, returning the page and the next cursor.
+
+    The cursor is the previous page's last document id, so a row inserted or
+    removed between pages shifts the boundary rather than corrupting it.
+    """
+    from app.models.admin import decode_cursor, encode_cursor
+
+    after = decode_cursor(cursor)
+    if after is not None:
+        ids = [key(r) for r in rows]
+        if after in ids:
+            rows = rows[ids.index(after) + 1 :]
+    page = rows[:limit]
+    next_cursor = encode_cursor(key(page[-1])) if len(rows) > limit and page else None
+    return page, next_cursor
+
+
+def _active_since(rows: list[UserStats], cutoff: datetime) -> int:
+    return sum(1 for r in rows if r.last_active_at >= cutoff)
 
 
 def _in_range(d: date, lo: date | None, hi: date | None) -> bool:
@@ -477,6 +876,371 @@ class FirestoreRepository:
         snap = self._user_doc(uid).collection("feeds").document(for_date.isoformat()).get()
         return MemoryFeed(**snap.to_dict()) if snap.exists else None
 
+    # ==================================================================
+    # Admin plane — top-level collections, outside `users/`.
+    #
+    # Deliberately not fields on `users/{uid}`: that document is client-writable
+    # by its owner (`firestore.rules`), so a `tier` living there could be
+    # self-granted from the app. Everything below is covered by the rules file's
+    # terminal `allow read, write: if false`, so no rules change is needed.
+    # ==================================================================
+    def _stats_doc(self, uid: str):  # pragma: no cover - real path
+        return self.db.collection("userStats").document(uid)
+
+    def _device_doc(self, install_id: str):  # pragma: no cover - real path
+        return self.db.collection("devices").document(install_id)
+
+    def get_user_stats(self, uid: str) -> UserStats | None:  # pragma: no cover - real path
+        snap = self._stats_doc(uid).get()
+        return UserStats(**snap.to_dict()) if snap.exists else None
+
+    def save_user_stats(self, stats: UserStats) -> UserStats:  # pragma: no cover - real path
+        self._stats_doc(stats.uid).set(stats.model_dump(mode="json"))
+        return stats
+
+    def ensure_user_stats(self, uid: str) -> tuple[UserStats, bool]:  # pragma: no cover
+        existing = self.get_user_stats(uid)
+        if existing is not None:
+            return existing, False
+        created = stats_ops.new_stats(uid)
+        self.save_user_stats(created)
+        return created, True
+
+    def touch_activity(  # pragma: no cover - real path
+        self, uid: str, install_id: str, platform: str, app_version: str
+    ) -> tuple[bool, bool]:
+        stats, created = self.ensure_user_stats(uid)
+        new_day = stats_ops.apply_activity(stats, install_id, platform, app_version)
+        self.save_user_stats(stats)
+        if install_id:
+            self._link_device(uid, install_id, platform, app_version, stats)
+        return created, (created or new_day)
+
+    def _link_device(  # pragma: no cover - real path
+        self,
+        uid: str,
+        install_id: str,
+        platform: str,
+        app_version: str,
+        stats: UserStats,
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        doc = self._device_doc(install_id)
+        snap = doc.get()
+        device = DeviceInfo(**snap.to_dict()) if snap.exists else DeviceInfo(
+            install_id=install_id, first_seen_at=now
+        )
+        device.last_seen_at = now
+        if platform:
+            device.platform = platform
+        if app_version:
+            device.app_version = app_version
+
+        account_ref = doc.collection("accounts").document(uid)
+        account_snap = account_ref.get()
+        account = (
+            DeviceAccount(**account_snap.to_dict())
+            if account_snap.exists
+            else DeviceAccount(uid=uid, install_id=install_id, first_seen_at=now)
+        )
+        account.last_seen_at = now
+        account.email = stats.email
+        account.preferred_name = stats.preferred_name
+        account_ref.set(account.model_dump(mode="json"))
+
+        # Recount rather than increment: the write is idempotent, so a retry
+        # cannot inflate the number that flags a shared device.
+        device.account_count = sum(1 for _ in doc.collection("accounts").list_documents())
+        doc.set(device.model_dump(mode="json"))
+
+    def record_created(  # pragma: no cover - real path
+        self, uid: str, duration_sec: float, recorded_at: datetime
+    ) -> UserStats:
+        stats, _ = self.ensure_user_stats(uid)
+        stats_ops.apply_recording_created(stats, duration_sec, recorded_at)
+        return self.save_user_stats(stats)
+
+    def record_deleted(  # pragma: no cover - real path
+        self, uid: str, duration_sec: float
+    ) -> UserStats | None:
+        stats = self.get_user_stats(uid)
+        if stats is None:
+            return None
+        stats_ops.apply_recording_deleted(stats, duration_sec)
+        return self.save_user_stats(stats)
+
+    def bump_feedback_count(self, uid: str) -> None:  # pragma: no cover - real path
+        stats, _ = self.ensure_user_stats(uid)
+        stats.feedback_count += 1
+        self.save_user_stats(stats)
+
+    def sync_user_identity(  # pragma: no cover - real path
+        self, uid: str, preferred_name: str, email: str, email_verified: bool
+    ) -> UserStats:
+        stats, _ = self.ensure_user_stats(uid)
+        stats_ops.apply_identity(stats, preferred_name, email, email_verified)
+        self.save_user_stats(stats)
+        for install_id in stats.install_ids:
+            ref = self._device_doc(install_id).collection("accounts").document(uid)
+            if ref.get().exists:
+                ref.set({"email": email, "preferred_name": preferred_name}, merge=True)
+        return stats
+
+    def set_tier(  # pragma: no cover - real path
+        self, uid: str, tier: UserTier | None, note: str | None, admin_uid: str
+    ) -> UserStats | None:
+        stats = self.get_user_stats(uid)
+        if stats is None:
+            return None
+        stats_ops.apply_tier(stats, tier, note, admin_uid)
+        return self.save_user_stats(stats)
+
+    def recompute_user_stats(self, uid: str) -> UserStats | None:  # pragma: no cover
+        stats = self.get_user_stats(uid)
+        if stats is None:
+            return None
+        stats_ops.recompute(stats, self.list_recordings(uid), len(self.list_feedback(uid)))
+        return self.save_user_stats(stats)
+
+    def list_user_stats(  # pragma: no cover - real path
+        self,
+        sort: str = "last_active_at",
+        order: str = "desc",
+        limit: int = 50,
+        cursor: str | None = None,
+        tier: str | None = None,
+        platform: str | None = None,
+        query: str | None = None,
+    ) -> tuple[list[UserStats], str | None]:
+        from google.cloud import firestore
+
+        from app.models.admin import decode_cursor, encode_cursor
+
+        col = self.db.collection("userStats")
+        q = col
+        if tier:
+            q = q.where("tier", "==", tier)
+        if platform:
+            q = q.where("platform", "==", platform)
+
+        sort_field = sort if sort in SORTABLE else "last_active_at"
+        if query:
+            # Firestore requires the first order_by to match the inequality
+            # field, so a search *forces* the sort onto the searched field. The
+            # router reports the effective sort rather than pretending.
+            needle = query.strip().lower()
+            q = q.where("email", ">=", needle).where("email", "<", needle + PREFIX_END)
+            sort_field = "email"
+            q = q.order_by("email")
+        else:
+            direction = firestore.Query.DESCENDING if order == "desc" else firestore.Query.ASCENDING
+            q = q.order_by(sort_field, direction=direction)
+
+        after = decode_cursor(cursor)
+        if after:
+            snap = col.document(after).get()
+            if snap.exists:
+                q = q.start_after(snap)
+
+        # One extra row tells us whether a further page exists without a count.
+        rows = [UserStats(**s.to_dict()) for s in q.limit(limit + 1).stream()]
+        page = rows[:limit]
+        next_cursor = encode_cursor(page[-1].uid) if len(rows) > limit and page else None
+        return page, next_cursor
+
+    def count_user_stats(  # pragma: no cover - real path
+        self, tier: str | None = None, active_since: datetime | None = None
+    ) -> int:
+        q = self.db.collection("userStats")
+        if tier:
+            q = q.where("tier", "==", tier)
+        if active_since is not None:
+            q = q.where("last_active_at", ">=", active_since.isoformat())
+        result = q.count().get()
+        return int(result[0][0].value)
+
+    def global_summary(self) -> dict:  # pragma: no cover - real path
+        """Aggregation queries, not a maintained counter document.
+
+        These bill at roughly one read per 1024 index entries, are always exactly
+        fresh, and need no write amplification — where a `globalStats/summary`
+        counter would have to stay consistent across create, delete, merge and
+        purge, four places to get wrong, to save a handful of reads per load.
+        """
+        from google.cloud import firestore
+
+        col = self.db.collection("userStats")
+        now = datetime.now(timezone.utc)
+
+        def _count(query) -> int:
+            return int(query.count().get()[0][0].value)
+
+        def _sum(field: str) -> float:
+            return float(col.sum(field).get()[0][0].value or 0)
+
+        # No MAX aggregation exists; one ordered read gets it for the same price.
+        top = list(
+            col.order_by("max_duration_sec", direction=firestore.Query.DESCENDING).limit(1).stream()
+        )
+        longest = UserStats(**top[0].to_dict()).max_duration_sec if top else 0.0
+
+        devices = self.db.collection("devices")
+        return {
+            "users_total": _count(col),
+            "users_premium": _count(col.where("tier", "==", UserTier.premium.value)),
+            "users_with_email": _count(col.where("email_verified", "==", True)),
+            "users_anonymous": _count(col.where("email", "==", "")),
+            "recordings_total": int(_sum("recordings_count")),
+            "total_duration_sec": round(_sum("total_duration_sec"), 3),
+            "max_duration_sec": longest,
+            "devices_total": _count(devices),
+            "multi_account_devices": _count(devices.where("account_count", ">", 1)),
+            "active_1d": self.count_user_stats(active_since=now - timedelta(days=1)),
+            "active_7d": self.count_user_stats(active_since=now - timedelta(days=7)),
+            "active_30d": self.count_user_stats(active_since=now - timedelta(days=30)),
+            "feedback_total": int(_sum("feedback_count")),
+            "failed_recordings": len(self.list_failed_recordings(limit=200)),
+        }
+
+    # -- devices -----------------------------------------------------------
+    def get_device(self, install_id: str) -> DeviceInfo | None:  # pragma: no cover
+        snap = self._device_doc(install_id).get()
+        return DeviceInfo(**snap.to_dict()) if snap.exists else None
+
+    def list_devices(  # pragma: no cover - real path
+        self, limit: int = 50, cursor: str | None = None
+    ) -> tuple[list[DeviceInfo], str | None]:
+        from google.cloud import firestore
+
+        from app.models.admin import decode_cursor, encode_cursor
+
+        col = self.db.collection("devices")
+        q = col.order_by("last_seen_at", direction=firestore.Query.DESCENDING)
+        after = decode_cursor(cursor)
+        if after:
+            snap = col.document(after).get()
+            if snap.exists:
+                q = q.start_after(snap)
+        rows = [DeviceInfo(**s.to_dict()) for s in q.limit(limit + 1).stream()]
+        page = rows[:limit]
+        next_cursor = encode_cursor(page[-1].install_id) if len(rows) > limit and page else None
+        return page, next_cursor
+
+    def list_device_accounts(self, install_id: str) -> list[DeviceAccount]:  # pragma: no cover
+        col = self._device_doc(install_id).collection("accounts")
+        rows = [DeviceAccount(**s.to_dict()) for s in col.stream()]
+        rows.sort(key=lambda a: a.last_seen_at, reverse=True)
+        return rows
+
+    def list_devices_for_user(self, uid: str) -> list[DeviceInfo]:  # pragma: no cover
+        # From the account's own trail rather than a collection-group scan: the
+        # list is already denormalized and capped, so this is O(devices) reads.
+        stats = self.get_user_stats(uid)
+        if stats is None:
+            return []
+        devices = [self.get_device(i) for i in stats.install_ids]
+        found = [d for d in devices if d is not None]
+        found.sort(key=lambda d: d.last_seen_at, reverse=True)
+        return found
+
+    # -- daily rollups -----------------------------------------------------
+    def bump_daily(  # pragma: no cover - real path
+        self, day: date, field: str, amount: float = 1, bucket: str | None = None
+    ) -> DailyStats:
+        from google.cloud import firestore
+
+        doc = self.db.collection("dailyStats").document(day.isoformat())
+        key = f"duration_buckets.{bucket}" if bucket is not None else field
+        doc.set(
+            {"day": day.isoformat(), key: firestore.Increment(amount)},
+            merge=True,
+        )
+        snap = doc.get()
+        return DailyStats(**snap.to_dict()) if snap.exists else DailyStats(day=day)
+
+    def list_daily(self, date_from: date, date_to: date) -> list[DailyStats]:  # pragma: no cover
+        col = self.db.collection("dailyStats")
+        rows = [
+            DailyStats(**s.to_dict())
+            for s in col.where("day", ">=", date_from.isoformat())
+            .where("day", "<=", date_to.isoformat())
+            .stream()
+        ]
+        rows.sort(key=lambda d: d.day)
+        return rows
+
+    # -- feedback triage ---------------------------------------------------
+    def list_all_feedback(  # pragma: no cover - real path
+        self,
+        limit: int = 50,
+        cursor: str | None = None,
+        kind: str | None = None,
+        platform: str | None = None,
+    ) -> tuple[list[Feedback], str | None]:
+        from google.cloud import firestore
+
+        from app.models.admin import decode_cursor, encode_cursor
+
+        # `Feedback.uid` is denormalized onto the document, so a collection
+        # group query needs no join back to the user.
+        q = self.db.collection_group("feedback")
+        if kind:
+            q = q.where("kind", "==", kind)
+        if platform:
+            q = q.where("platform", "==", platform)
+        q = q.order_by("created_at", direction=firestore.Query.DESCENDING)
+
+        after = decode_cursor(cursor)
+        rows = [doc_to_feedback(s.to_dict()) for s in q.limit(limit + 1).stream()]
+        if after:
+            ids = [f.id for f in rows]
+            if after in ids:
+                rows = rows[ids.index(after) + 1 :]
+        page = rows[:limit]
+        next_cursor = encode_cursor(page[-1].id) if len(rows) > limit and page else None
+        return page, next_cursor
+
+    def get_triage(self, feedback_id: str) -> FeedbackTriage | None:  # pragma: no cover
+        snap = self.db.collection("feedbackTriage").document(feedback_id).get()
+        return FeedbackTriage(**snap.to_dict()) if snap.exists else None
+
+    def save_triage(self, triage: FeedbackTriage) -> FeedbackTriage:  # pragma: no cover
+        self.db.collection("feedbackTriage").document(triage.feedback_id).set(
+            triage.model_dump(mode="json")
+        )
+        return triage
+
+    # -- pipeline health ---------------------------------------------------
+    def list_failed_recordings(self, limit: int = 50) -> list[Recording]:  # pragma: no cover
+        rows: list[Recording] = []
+        for status in (RecordingStatus.failed, RecordingStatus.transcribing):
+            rows += [
+                doc_to_recording(s.to_dict())
+                for s in self.db.collection_group("recordings")
+                .where("status", "==", status.value)
+                .limit(limit)
+                .stream()
+            ]
+        rows.sort(key=lambda r: r.updated_at, reverse=True)
+        return rows[:limit]
+
+    # -- audit -------------------------------------------------------------
+    def add_audit(self, entry: AdminAuditEntry) -> AdminAuditEntry:  # pragma: no cover
+        self.db.collection("adminAudit").document(entry.id).set(entry.model_dump(mode="json"))
+        return entry
+
+    def list_audit(self, limit: int = 100) -> list[AdminAuditEntry]:  # pragma: no cover
+        from google.cloud import firestore
+
+        rows = [
+            AdminAuditEntry(**s.to_dict())
+            for s in self.db.collection("adminAudit")
+            .order_by("at", direction=firestore.Query.DESCENDING)
+            .limit(limit)
+            .stream()
+        ]
+        return rows
+
     # -- merge (restore after reinstall) -----------------------------------
     def merge_user(self, src_uid: str, dst_uid: str) -> dict[str, int]:
         """See [Repository.merge_user]. Callers must have proven both sides."""
@@ -514,6 +1278,17 @@ class FirestoreRepository:
         for snap in self._user_doc(dst_uid).collection("feeds").stream():
             snap.reference.delete()
 
+        # Fold the account's history onto the session that now owns it, before
+        # the source disappears. `stats.merge_stats` documents why the direction
+        # of this call is so easy to get backwards.
+        src_stats = self.get_user_stats(src_uid)
+        if src_stats is not None:
+            dst_stats, _ = self.ensure_user_stats(dst_uid)
+            self.save_user_stats(stats_ops.merge_stats(src_stats, dst_stats))
+            for install_id in src_stats.install_ids:
+                self._device_doc(install_id).collection("accounts").document(src_uid).delete()
+            self._stats_doc(src_uid).delete()
+
         self._user_doc(src_uid).delete()
         return moved
 
@@ -528,6 +1303,13 @@ class FirestoreRepository:
                 snap.reference.delete()
         if profile and profile.email:
             self.db.collection("emailIndex").document(normalize_email(profile.email)).delete()
+        # The install id lives on the stats document and the device link, and
+        # nowhere else — removing both is what makes it genuinely deletable.
+        stats = self.get_user_stats(uid)
+        if stats is not None:
+            for install_id in stats.install_ids:
+                self._device_doc(install_id).collection("accounts").document(uid).delete()
+            self._stats_doc(uid).delete()
         self._user_doc(uid).delete()
 
 

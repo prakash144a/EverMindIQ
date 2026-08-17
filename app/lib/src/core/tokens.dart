@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Design tokens for VoiceIQ — the single source of truth for the brand's
+/// Design tokens for MemoriesIQ — the single source of truth for the brand's
 /// colours, spacing, radii and motion. "Refined violet keepsake" identity:
 /// a warm indigo-violet with a gold accent reserved for milestones/highlights.
 class AppColors {

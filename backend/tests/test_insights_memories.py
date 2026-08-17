@@ -21,7 +21,9 @@ def test_custom_range_requires_dates():
 
 
 def test_insight_summarizes_and_caches(make_recording):
-    make_recording("alice", "Started learning the piano this week.", event_date=date.today().isoformat())
+    make_recording(
+        "alice", "Started learning the piano this week.", event_date=date.today().isoformat()
+    )
     first = generate_insight("alice", InsightRequest(range=InsightRange.lifetime))
     assert first.recording_count == 1
     assert first.summary

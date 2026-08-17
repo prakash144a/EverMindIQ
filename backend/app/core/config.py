@@ -12,6 +12,11 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _split(value: str) -> list[str]:
+    """Parse a comma-separated setting, dropping blanks and surrounding space."""
+    return [part.strip() for part in value.split(",") if part.strip()]
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="VOICEIQ_", env_file=".env", extra="ignore"
@@ -50,6 +55,20 @@ class Settings(BaseSettings):
     otp_resend_cooldown_seconds: int = 60
     otp_code_length: int = 6
 
+    # Admin console ---------------------------------------------------------
+    # Comma-separated, NOT list[str]: pydantic-settings parses a list-typed env
+    # var as JSON, so `VOICEIQ_ADMIN_UIDS=a,b` would fail validation and the
+    # Terraform env block would have to spell it `["a","b"]`.
+    admin_uids: str = ""
+    admin_emails: str = ""
+
+    # How long an instance may skip re-writing a user's activity record. Day
+    # granularity in practice; this only bounds the in-process cache.
+    activity_throttle_seconds: int = 900
+
+    # CORS. "*" is the dev default; production names the console's origin.
+    cors_origins: str = "*"
+
     # Behavior --------------------------------------------------------------
     signed_url_ttl_seconds: int = 900
     rag_top_k: int = 6
@@ -59,6 +78,23 @@ class Settings(BaseSettings):
     def effective_mock(self) -> bool:
         """Force mock when no project is configured, regardless of the flag."""
         return self.mock or not self.gcp_project
+
+    @property
+    def admin_uid_set(self) -> frozenset[str]:
+        return frozenset(_split(self.admin_uids))
+
+    @property
+    def admin_email_set(self) -> frozenset[str]:
+        """Lowercased, so the allowlist matches however the address is typed."""
+        return frozenset(e.lower() for e in _split(self.admin_emails))
+
+    @property
+    def admin_configured(self) -> bool:
+        return bool(self.admin_uid_set or self.admin_email_set)
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return _split(self.cors_origins) or ["*"]
 
     @property
     def email_configured(self) -> bool:

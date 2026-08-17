@@ -6,7 +6,7 @@ import 'package:voiceiq/src/app.dart';
 
 void main() {
   testWidgets('App boots and renders the shell', (tester) async {
-    await tester.pumpWidget(const ProviderScope(child: VoiceIQApp()));
+    await tester.pumpWidget(const ProviderScope(child: MemoriesIQApp()));
     await tester.pump();
     expect(find.byType(MaterialApp), findsOneWidget);
   });

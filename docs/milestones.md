@@ -1,9 +1,10 @@
-# VoiceIQ / EverMindIQ — Milestones & Progress
+# MemoriesIQ / VoiceIQ — Milestones & Progress
 
 A living tracker for every phase and major work item. Update the status boxes as work lands.
-Aligns with the phased delivery in [architecture.md §7](./architecture.md).
+Aligns with the phased delivery in [architecture.md §8](./architecture.md).
 
-**Last updated:** 2026-08-16 (real-mode end-to-end pass: the full cloud path works; 3 defects fixed)
+**Last updated:** 2026-08-17 (admin console live at `memoriesiq-admin.web.app`; backend deployed;
+Firestore indexes deployable for the first time; CI lint gate fixed)
 
 ## Status legend
 
@@ -80,6 +81,46 @@ Aligns with the phased delivery in [architecture.md §7](./architecture.md).
 
 ---
 
+## Phase 3.5 — Operations & launch surface
+
+- [x] **Renamed the product to MemoriesIQ** — launcher label, in-app title, onboarding copy, web
+  title/manifest, pubspec description, and the `MemoriesIQApp` widget. `AppConfig.appName` is now the
+  single source. VoiceIQ deliberately stays as the internal name for the backend, the `VOICEIQ_` env
+  prefix, the Dart package, and every GCP resource
+- [x] **Android application id** → `com.memoriesiq.app` (was `com.example.voiceiq`, which the Play
+  Store rejects outright). **Blocked on a manual step**: the new package must be registered in the
+  Firebase console and `google-services.json` regenerated, or the Android build fails
+- [x] **Admin console** (`admin/`) — React + Vite SPA: overview with charts, paginated/searchable
+  people list, per-account detail, device view, cross-user feedback inbox with triage, pipeline
+  health, and an admin audit log
+- [x] **Admin API** (`/admin/*`) — allowlist authorization (`require_admin`), fail-closed on an empty
+  allowlist, and a hard rule that **no endpoint returns any user's content**, enforced structurally by
+  the response models and by `test_admin_privacy.py`
+- [x] **Per-user stats** — denormalized counters in a top-level `userStats` collection so the console
+  never walks every user's recordings. Kept out of `users/{uid}` because that document is
+  client-writable, so a `tier` there could be self-granted
+- [x] **Device ↔ account tracking** — install UUID (not a hardware id) sent as a request header and
+  throttled to ~one write per user per day. Survives sign-out, so the console can show several
+  accounts on one phone once account switching ships
+- [x] **Premium/free tier** — admin-set flag with an audit trail. A label, not an entitlement:
+  nothing in the app enforces a limit yet
+- [x] **Marketing site** (`site/`) — static HTML for ad traffic, plus the privacy policy the Play
+  listing requires. **Placeholders still to fill**: legal entity, address, contact, jurisdiction
+- [x] **Firebase Hosting** — two targets (`site`, `admin`) in `firebase.json` + `.firebaserc`;
+  `firebasehosting.googleapis.com` enabled in Terraform
+- [x] **Firebase web app registered + Google sign-in enabled**; admin console deployed to
+  `https://memoriesiq-admin.web.app` with the allowlist set on Cloud Run
+- [x] ~~Run the stats backfill~~ — **not required.** The script
+  (`backend/scripts/backfill_user_stats.py`) is kept for the case where pre-`userStats` accounts ever
+  need reconstructing, but the existing accounts are throwaway test identities not worth importing
+- [ ] **Publish the marketing site** — legal pages are filled in
+  (NATIVE MINDS AI LABS); the governing jurisdiction and the US$100 liability cap were inferred from
+  the registered address and want a lawyer's confirmation before the site takes ad traffic
+- [ ] **Decide what premium actually unlocks** — deferred; the toggle exists, is audited, and
+  currently changes nothing for the user
+
+---
+
 ## Phase 4 — Cost optimization (post-launch)
 
 > **Deliberately deferred.** None of this changes what the product does; it changes what it costs to
@@ -136,10 +177,24 @@ Aligns with the phased delivery in [architecture.md §7](./architecture.md).
   behind forever (confirmed against the live bucket): a storage cost, and audio the user believes is
   gone. Account purge now also sweeps the whole `users/{uid}/audio/` prefix, which `account.py` had
   documented but never implemented
-- [ ] **CI has been red on every run since the initial commit** — `ruff` is unpinned (`ruff>=0.5`), so
-  CI resolves the latest (0.16.x), whose default rule set flags widespread pre-existing code (`B008` on
-  every FastAPI `Depends`, `UP017`, `DTZ011`, …). Pin ruff and/or configure `[tool.ruff.lint] select`
-  so the gate reflects the project's actual style
+- [x] **CI lint gate fixed** — was red on *every* run since the initial commit, because `ruff>=0.5`
+  resolved to 0.16.x and flagged widespread pre-existing code (86 findings: `B008` on every FastAPI
+  `Depends`, `UP017`, `DTZ011`, …). Ruff is now pinned to `>=0.16,<0.17` and `[tool.ruff.lint] select`
+  is explicit (`E`, `W`, `F`, `I`), with `B008`/`UP017` excluded and the reason recorded in
+  `pyproject.toml`. The remaining 9 real findings were fixed; `ruff check app tests` passes clean
+- [x] **Firestore indexes were never deployable** — `firestore.indexes.json` declared the
+  `chunks.embedding` vector index in a shape the CLI rejects, so `firebase deploy --only
+  firestore:indexes` failed every time it ran, including inside the gated CI deploy job. The
+  declaration was also meaningless: `chunks_to_doc` packs all chunks into one document, so no
+  root-level `embedding` field exists to index. Removed; it belongs with the Phase 4 `find_nearest`
+  migration that changes that layout. Two further fixes: single-field **collection-group** queries
+  (`feedback.created_at`, `recordings.status`) need field overrides, not composite indexes —
+  Firestore rejects the latter with "this index is not necessary" or fails the query at runtime
+- [x] **A 500 used to reach the browser as "Failed to fetch"** — Starlette's error middleware sits
+  *outside* `CORSMiddleware`, so an unhandled exception returned a bare 500 with no
+  `Access-Control-Allow-Origin`, which a browser cannot read. The admin console showed a network
+  error while the real cause (a missing index) sat in the logs. Errors are now converted to JSON
+  inside the CORS layer (`app/main.py`), covered by `tests/test_error_responses.py`
 - [ ] Cross-lingual recall unverified — the multilingual embedder is the load-bearing choice for the
   target users (Tamil/Hindi memories, English questions) and has never been tested with non-English
   audio. Needs a real non-English recording through the live pipeline
@@ -154,8 +209,9 @@ Aligns with the phased delivery in [architecture.md §7](./architecture.md).
 | 1 — MVP | 8 | 0 | 1 |
 | 2 — Enrichment | 0 | 2 | 2 |
 | 3 — Scale & polish | 0 | 1 | 5 |
+| 3.5 — Operations & launch | 11 | 0 | 2 |
 | 4 — Cost optimization | 0 | 0 | 7 |
-| Cross-cutting | 3 | 0 | 4 |
+| Cross-cutting | 6 | 0 | 3 |
 
 ## Maintaining this doc
 

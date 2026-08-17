@@ -1,7 +1,12 @@
-# VoiceIQ (EverMindIQ)
+# MemoriesIQ (VoiceIQ / EverMindIQ)
 
 AI-native voice app for capturing important life moments by voice — and later *talking to an AI*
 that can recall and reason across a lifetime of those memories.
+
+> **On the names.** **MemoriesIQ** is the product: it is what the app is called, what the launcher
+> shows, and what the marketing site sells. **VoiceIQ** is the internal name and stays that way —
+> the backend service, the `VOICEIQ_` env prefix, the GCP project, and every Terraform resource. The
+> split is intentional; renaming live cloud resources buys nothing a user would ever notice.
 
 - **Record** a moment by voice (defaults to now, can back-date to any day).
 - **Talk to AI** in real time to ask anything about your past memories (Gemini Live).
@@ -18,10 +23,14 @@ is built in via multilingual embeddings.
 EverMindIQ/
 ├── app/        # Flutter client (iOS + Android)
 ├── backend/    # FastAPI service on Cloud Run (API, ingestion, RAG, Live proxy)
+├── admin/      # Operator console (React + Vite), talks to the backend's /admin API
+├── site/       # Public marketing site — static HTML, no build step
 ├── infra/      # Terraform (GCS+CMEK, Firestore, Pub/Sub, Cloud Run, Secret Manager)
 ├── docs/       # Architecture & design docs
 └── README.md
 ```
+
+`admin/` and `site/` both deploy to Firebase Hosting as separate targets (`firebase.json`).
 
 ## Tech stack
 

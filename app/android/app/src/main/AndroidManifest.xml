@@ -5,7 +5,7 @@
          automatically; release builds must declare it explicitly.) -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <application
-        android:label="voiceiq"
+        android:label="MemoriesIQ"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

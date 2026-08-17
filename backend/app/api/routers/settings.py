@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
+from app.core.activity import track_activity
 from app.core.security import CurrentUser, get_current_user
 from app.models.user import UserSettings
 from app.services.firestore import get_repository
 
-router = APIRouter(prefix="/settings", tags=["settings"])
+router = APIRouter(prefix="/settings", tags=["settings"], dependencies=[Depends(track_activity)])
 
 
 @router.get("", response_model=UserSettings)

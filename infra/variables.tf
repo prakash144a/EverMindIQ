@@ -26,6 +26,24 @@ variable "billing_account" {
   description = "Cloud Billing account id (e.g. 016CC6-981245-C8F3B9) that owns this project; used for the budget + alerts."
 }
 
+variable "admin_uids" {
+  type        = string
+  default     = ""
+  description = "Comma-separated Firebase uids allowed into /admin. Empty denies everyone."
+}
+
+variable "admin_emails" {
+  type        = string
+  default     = ""
+  description = "Comma-separated emails allowed into /admin. Only matches tokens with a VERIFIED email, so sign in with Google rather than email/password."
+}
+
+variable "cors_origins" {
+  type        = string
+  default     = "*"
+  description = "Comma-separated browser origins allowed to call the API. The mobile app ignores CORS; this only gates the web console."
+}
+
 variable "monthly_budget_usd" {
   type        = number
   default     = 50

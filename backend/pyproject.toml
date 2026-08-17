@@ -24,7 +24,10 @@ gcp = [
 dev = [
     "pytest>=8.2",
     "pytest-asyncio>=0.23",
-    "ruff>=0.5",
+    # Pinned to a minor line. Unpinned, CI resolved whatever was newest and a
+    # new release could turn the build red without a code change — which is
+    # exactly what happened: every CI run failed from the first commit onward.
+    "ruff>=0.16,<0.17",
 ]
 
 [tool.pytest.ini_options]
@@ -34,6 +37,17 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.lint]
+# Chosen explicitly rather than inherited, so a ruff upgrade cannot silently
+# add rules and fail the build. Pyflakes, pycodestyle, and import order — the
+# errors that indicate a real mistake.
+select = ["E", "W", "F", "I"]
+# Deliberately NOT enabled:
+#   B008  flags `Depends(...)` in a parameter default, which is the documented
+#         FastAPI idiom and is used by every route in this codebase.
+#   UP017 prefers `datetime.UTC` over `timezone.utc`; the codebase is
+#         consistently the latter and the two are identical at runtime.
 
 [build-system]
 requires = ["setuptools>=68"]

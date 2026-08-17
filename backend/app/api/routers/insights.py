@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from app.core.activity import track_activity
 from app.core.security import CurrentUser, get_current_user
 from app.models.insight import Insight, InsightRequest
 from app.pipeline.insights import generate_insight
 
-router = APIRouter(prefix="/insights", tags=["insights"])
+router = APIRouter(prefix="/insights", tags=["insights"], dependencies=[Depends(track_activity)])
 
 
 @router.post("", response_model=Insight)

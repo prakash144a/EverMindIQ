@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import '../core/config.dart';
+import '../core/device_identity.dart';
 import 'models.dart';
 
 /// Supplies a bearer token (a Firebase ID token in production), or null.
@@ -27,9 +28,17 @@ class ApiClient {
 
   Future<Map<String, String>> _headers({bool json = true}) async {
     final token = (await _tokenProvider?.call()) ?? AppConfig.devUid;
+    final installId = DeviceIdentity.installId;
     return {
       'Authorization': 'Bearer $token',
       if (json) 'Content-Type': 'application/json',
+      // Ride along on requests we are making anyway. A dedicated heartbeat call
+      // would cost a round trip on every launch, and attaching this to the
+      // record payload instead would tell us nothing about people who open the
+      // app and never record. The server throttles the resulting write.
+      if (installId.isNotEmpty) 'X-Install-Id': installId,
+      'X-Platform': DeviceIdentity.platform,
+      'X-App-Version': AppConfig.appVersion,
     };
   }
 

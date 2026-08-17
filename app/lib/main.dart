@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'firebase_options.dart';
 import 'src/app.dart';
+import 'src/core/device_identity.dart';
 import 'src/data/error_log.dart';
 
 Future<void> main() async {
@@ -26,6 +27,10 @@ Future<void> main() async {
     return false; // still reported to the platform
   };
 
+  // Resolved before the first request so every call can read it synchronously.
+  // Its own failures are already handled internally, so this cannot block boot.
+  await DeviceIdentity.ensure();
+
   try {
     await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   } catch (e, st) {
@@ -36,7 +41,7 @@ Future<void> main() async {
   runApp(
     ProviderScope(
       observers: [ErrorLoggingObserver()],
-      child: const VoiceIQApp(),
+      child: const MemoriesIQApp(),
     ),
   );
 }

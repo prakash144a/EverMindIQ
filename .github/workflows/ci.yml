@@ -39,6 +39,26 @@ jobs:
       - run: flutter analyze
       - run: flutter test
 
+  admin:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: admin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: admin/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Build
+        run: npx vite build
+      # `site/` has no job: it is hand-written static HTML with no build step and
+      # nothing to test. It is deployed straight from the repo.
+
   # Build the backend image, deploy Cloud Run, and push Firestore rules/indexes.
   # Runs only on main once deployment is configured. To enable:
   #   1. Provision infra (see infra/README.md) so the Artifact Registry repo,
@@ -49,7 +69,7 @@ jobs:
   #   3. Add repo variables: DEPLOY_ENABLED=true, GCP_PROJECT_ID, GCP_REGION.
   #   4. Add repo secrets: GCP_WIF_PROVIDER, GCP_DEPLOY_SA.
   deploy:
-    needs: [backend, app]
+    needs: [backend, app, admin]
     if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.DEPLOY_ENABLED == 'true' }}
     runs-on: ubuntu-latest
     permissions:
@@ -82,10 +102,30 @@ jobs:
             --region "$REGION" \
             --quiet
 
-      - name: Deploy Firestore rules & indexes
+      # The console is a static bundle; it holds no secrets, and every
+      # authorization decision is made server-side by the admin allowlist.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: admin/package-lock.json
+
+      - name: Build the admin console
+        working-directory: admin
+        env:
+          VITE_API_BASE_URL: ${{ vars.ADMIN_API_BASE_URL }}
+          VITE_FIREBASE_API_KEY: ${{ vars.FIREBASE_WEB_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ vars.FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          VITE_FIREBASE_APP_ID: ${{ vars.FIREBASE_WEB_APP_ID }}
+        run: |
+          npm ci
+          npx vite build
+
+      - name: Deploy Firestore rules, indexes & hosting
         run: |
           npm install -g firebase-tools
           firebase deploy \
-            --only firestore:rules,firestore:indexes \
+            --only firestore:rules,firestore:indexes,hosting \
             --project "$PROJECT" \
             --non-interactive

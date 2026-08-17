@@ -3,9 +3,9 @@
 Real mode uses a Vertex AI **multilingual** embedding model (the load-bearing choice for
 cross-lingual recall: an English query matches Tamil/Hindi/French memories).
 
-Mock mode uses a deterministic hashing bag-of-words embedder. It is not multilingual, but it produces
-real, normalized vectors with meaningful cosine similarity for same-language text, so the RAG
-retrieval path is genuinely exercised and testable without network calls.
+Mock mode uses a deterministic hashing bag-of-words embedder. It is not multilingual, but it
+produces real, normalized vectors with meaningful cosine similarity for same-language text, so the
+RAG retrieval path is genuinely exercised and testable without network calls.
 """
 
 from __future__ import annotations

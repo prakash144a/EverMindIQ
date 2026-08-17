@@ -1,6 +1,11 @@
-# VoiceIQ App (Flutter)
+# MemoriesIQ App (Flutter)
 
 Flutter client for iOS + Android: Record, Talk-to-AI, Home (On This Day), Calendar, Insights.
+
+The product name is **MemoriesIQ** — that is what users see. The Dart package is still `voiceiq`
+and the backend is still VoiceIQ, deliberately: those are internal names, and renaming them would
+churn every `package:voiceiq/...` import for nothing a user would notice. `AppConfig.appName` is the
+one place the display name lives.
 
 ## First-time setup
 
@@ -22,7 +27,7 @@ Then add microphone permissions:
 - **iOS** — in `ios/Runner/Info.plist`:
   ```xml
   <key>NSMicrophoneUsageDescription</key>
-  <string>VoiceIQ records your voice memories.</string>
+  <string>MemoriesIQ records your voice memories.</string>
   ```
 
 ## Run against the backend

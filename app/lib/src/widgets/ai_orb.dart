@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/tokens.dart';
 
-/// The VoiceIQ AI presence: a luminous violet orb that breathes while idle and
+/// The MemoriesIQ AI presence: a luminous violet orb that breathes while idle and
 /// pulses a halo while [active] (listening / speaking). Hand-rolled with
 /// [AnimationController]s so it needs no animation package.
 class AiOrb extends StatefulWidget {

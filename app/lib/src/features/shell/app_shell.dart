@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/config.dart';
 import '../../core/tokens.dart';
 import '../../data/audio_playback.dart';
 import '../../data/models.dart';
@@ -62,7 +63,7 @@ class AppShell extends ConsumerWidget {
     return Scaffold(
       drawer: const AppMenuDrawer(),
       appBar: AppBar(
-        title: const Text('VoiceIQ'),
+        title: const Text(AppConfig.appName),
         actions: [
           IconButton(
             icon: const Icon(Icons.settings_outlined),

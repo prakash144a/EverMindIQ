@@ -68,7 +68,8 @@ def test_patch_omitting_a_field_leaves_it_alone(make_recording, client):
 def test_patch_is_scoped_to_the_owner(make_recording, client):
     rec = make_recording("alice", "Alice's memory.")
     body = {"is_milestone": True}
-    assert client.patch(f"/recordings/{rec['id']}", json=body, headers=auth("bob")).status_code == 404
+    other = client.patch(f"/recordings/{rec['id']}", json=body, headers=auth("bob"))
+    assert other.status_code == 404
     assert client.patch("/recordings/nope", json=body, headers=auth("alice")).status_code == 404
     assert client.get("/recordings", headers=auth("alice")).json()[0]["is_milestone"] is False
 

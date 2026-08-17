@@ -19,6 +19,8 @@ locals {
     "artifactregistry.googleapis.com",
     "cloudbuild.googleapis.com",
     "billingbudgets.googleapis.com",
+    # Serves the marketing site and the admin console as static hosting.
+    "firebasehosting.googleapis.com",
   ]
 }
 
@@ -126,13 +128,13 @@ resource "google_service_account" "backend" {
 
 resource "google_project_iam_member" "backend_roles" {
   for_each = toset([
-    "roles/datastore.user",              # Firestore read/write
-    "roles/storage.objectAdmin",         # signed URLs + object lifecycle (scoped bucket below)
-    "roles/pubsub.publisher",            # publish ingest events
-    "roles/aiplatform.user",             # call Gemini / embeddings
+    "roles/datastore.user",      # Firestore read/write
+    "roles/storage.objectAdmin", # signed URLs + object lifecycle (scoped bucket below)
+    "roles/pubsub.publisher",    # publish ingest events
+    "roles/aiplatform.user",     # call Gemini / embeddings
     "roles/secretmanager.secretAccessor",
     "roles/cloudkms.cryptoKeyEncrypterDecrypter",
-    "roles/firebaseauth.viewer",         # verify_id_token(check_revoked=True) looks up the user record
+    "roles/firebaseauth.viewer", # verify_id_token(check_revoked=True) looks up the user record
   ])
   project = var.project_id
   role    = each.value
@@ -202,6 +204,23 @@ resource "google_cloud_run_v2_service" "api" {
       env {
         name  = "VOICEIQ_MODEL_REASONING"
         value = "gemini-2.5-flash"
+      }
+      # Admin console access. Comma-separated; an empty value denies everyone,
+      # which is the right default for a service that has just been deployed.
+      # Email entries only match a token whose email is *verified*.
+      env {
+        name  = "VOICEIQ_ADMIN_UIDS"
+        value = var.admin_uids
+      }
+      env {
+        name  = "VOICEIQ_ADMIN_EMAILS"
+        value = var.admin_emails
+      }
+      # Browser origins allowed to call the API. The mobile app is not a browser
+      # and ignores CORS entirely, so this only ever affects the web console.
+      env {
+        name  = "VOICEIQ_CORS_ORIGINS"
+        value = var.cors_origins
       }
     }
     scaling {

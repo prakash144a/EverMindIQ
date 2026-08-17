@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.voiceiq"
+    namespace = "com.memoriesiq.app"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -15,8 +15,8 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.voiceiq"
+        // Must match the Android app registered in Firebase (google-services.json).
+        applicationId = "com.memoriesiq.app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion // firebase_auth requires Android API 23+

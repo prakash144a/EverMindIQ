@@ -3,7 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import 'tokens.dart';
 
-/// VoiceIQ theme — Refined violet keepsake. Material 3, light + dark.
+/// MemoriesIQ theme — Refined violet keepsake. Material 3, light + dark.
 ///
 /// Typography pairs **Fraunces** (a soft serif) for titles and memory content
 /// with **Inter** for UI/body text. Gold is wired to `tertiary` so it stays a

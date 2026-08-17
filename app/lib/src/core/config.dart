@@ -3,6 +3,13 @@
 /// Example:
 ///   flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000 --dart-define=DEV_UID=alice
 class AppConfig {
+  /// The product name users see.
+  ///
+  /// The Dart package, the backend service, the `VOICEIQ_` env prefix and every
+  /// GCP resource stay "VoiceIQ" on purpose — that is the internal name. This is
+  /// the brand, and it is the only spelling that should ever reach a screen.
+  static const String appName = 'MemoriesIQ';
+
   /// REST base URL. Android emulator reaches host localhost via 10.0.2.2.
   static const String apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',

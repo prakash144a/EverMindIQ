@@ -25,8 +25,8 @@ def test_rag_returns_empty_when_no_memories(client):
 
 
 def test_rag_is_isolated_per_user(make_recording, client):
-    # Both memories share the word "vacation" so the (lexical) mock retriever has something to match;
-    # per-user isolation must still ensure Bob only ever sees his own memory.
+    # Both memories share the word "vacation" so the (lexical) mock retriever has something to
+    # match; per-user isolation must still ensure Bob only ever sees his own memory.
     make_recording("alice", "Alice went on vacation scuba diving in Bali.")
     make_recording("bob", "Bob went on vacation skiing in the Alps.")
 

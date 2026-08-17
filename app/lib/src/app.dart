@@ -1,17 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'core/config.dart';
 import 'core/theme.dart';
 import 'data/auth.dart';
 import 'features/shell/app_shell.dart';
 
-class VoiceIQApp extends StatelessWidget {
-  const VoiceIQApp({super.key});
+class MemoriesIQApp extends StatelessWidget {
+  const MemoriesIQApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'VoiceIQ',
+      title: AppConfig.appName,
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),

@@ -4,12 +4,13 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, Query
 
+from app.core.activity import track_activity
 from app.core.security import CurrentUser, get_current_user
 from app.models.memory import MemoryFeed
 from app.pipeline.memories import build_on_this_day
 from app.services.firestore import get_repository
 
-router = APIRouter(prefix="/memories", tags=["memories"])
+router = APIRouter(prefix="/memories", tags=["memories"], dependencies=[Depends(track_activity)])
 
 
 @router.get("/on-this-day", response_model=MemoryFeed)

@@ -1,4 +1,4 @@
-package com.example.voiceiq
+package com.memoriesiq.app
 
 import io.flutter.embedding.android.FlutterActivity
 

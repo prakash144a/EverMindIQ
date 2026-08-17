@@ -6,11 +6,12 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, status
 
+from app.core.activity import track_activity
 from app.core.security import CurrentUser, get_current_user
 from app.models.feedback import Feedback, FeedbackCreate
 from app.services.firestore import get_repository
 
-router = APIRouter(prefix="/feedback", tags=["feedback"])
+router = APIRouter(prefix="/feedback", tags=["feedback"], dependencies=[Depends(track_activity)])
 
 log = logging.getLogger(__name__)
 
@@ -31,7 +32,12 @@ def create_feedback(
         platform=body.platform,
         created_at=datetime.now(timezone.utc),
     )
-    get_repository().add_feedback(item)
+    repo = get_repository()
+    repo.add_feedback(item)
+    try:
+        repo.bump_feedback_count(user.uid)
+    except Exception:  # pragma: no cover - bookkeeping must not lose the report
+        log.exception("failed to count feedback for uid %s", user.uid)
     # Also emit to Cloud Logging so reports are visible without querying the store.
     log.warning(
         "feedback kind=%s uid=%s platform=%s version=%s message=%s",

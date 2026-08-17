@@ -1,0 +1,322 @@
+/* MemoriesIQ marketing site.
+   Deliberately hand-written and dependency-free: this page exists to convert
+   paid-ad clicks, so first paint matters more than authoring convenience. No
+   framework, no webfont request, no build step. */
+
+:root {
+  --violet: #6d4aff;
+  --violet-deep: #4a2fd0;
+  --ink: #16121f;
+  --body: #4a4458;
+  --bg: #ffffff;
+  --surface: #f7f5ff;
+  --border: #e6e1f5;
+  --radius: 16px;
+  --max: 1080px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #f4f1fb;
+    --body: #b6b0c7;
+    --bg: #100d18;
+    --surface: #191330;
+    --border: #2a2340;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--body);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  font-size: 17px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3 {
+  color: var(--ink);
+  line-height: 1.2;
+  margin: 0 0 0.5em;
+  letter-spacing: -0.02em;
+}
+
+h1 {
+  font-size: clamp(2.1rem, 6vw, 3.4rem);
+}
+h2 {
+  font-size: clamp(1.6rem, 4vw, 2.2rem);
+}
+h3 {
+  font-size: 1.15rem;
+}
+
+p {
+  margin: 0 0 1rem;
+}
+
+a {
+  color: var(--violet);
+}
+
+.wrap {
+  max-width: var(--max);
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* -- header ---------------------------------------------------------- */
+
+header {
+  padding: 22px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 1.1rem;
+}
+
+.mark {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 32% 28%, #9d7bff, var(--violet) 55%, var(--violet-deep));
+  flex: none;
+}
+
+.nav {
+  display: flex;
+  gap: 22px;
+  font-size: 0.95rem;
+}
+
+.nav a {
+  color: var(--body);
+  text-decoration: none;
+}
+
+.nav a:hover {
+  color: var(--violet);
+}
+
+@media (max-width: 640px) {
+  .nav {
+    display: none;
+  }
+}
+
+/* -- hero ------------------------------------------------------------ */
+
+.hero {
+  padding: 84px 0 72px;
+  text-align: center;
+}
+
+.hero p.lead {
+  font-size: clamp(1.05rem, 2.4vw, 1.3rem);
+  max-width: 40ch;
+  margin: 0 auto 2rem;
+}
+
+.cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--violet);
+  color: #fff;
+  text-decoration: none;
+  font-weight: 600;
+  padding: 15px 30px;
+  border-radius: 999px;
+  border: none;
+  font-size: 1rem;
+}
+
+.cta:hover {
+  background: var(--violet-deep);
+}
+
+.cta-note {
+  display: block;
+  margin-top: 14px;
+  font-size: 0.9rem;
+  color: var(--body);
+}
+
+/* -- sections -------------------------------------------------------- */
+
+section {
+  padding: 68px 0;
+  border-top: 1px solid var(--border);
+}
+
+.section-head {
+  max-width: 46ch;
+  margin-bottom: 40px;
+}
+
+.grid {
+  display: grid;
+  gap: 22px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 28px;
+}
+
+.card h3 {
+  margin-bottom: 0.4em;
+}
+
+.card p:last-child {
+  margin-bottom: 0;
+}
+
+.step-n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--violet);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.9rem;
+  margin-bottom: 14px;
+}
+
+/* -- faq ------------------------------------------------------------- */
+
+details {
+  border-bottom: 1px solid var(--border);
+  padding: 18px 0;
+}
+
+summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--ink);
+  list-style: none;
+}
+
+summary::-webkit-details-marker {
+  display: none;
+}
+
+summary::after {
+  content: "+";
+  float: right;
+  color: var(--violet);
+  font-weight: 400;
+  font-size: 1.3rem;
+  line-height: 1;
+}
+
+details[open] summary::after {
+  content: "\2212";
+}
+
+details p {
+  margin: 12px 0 0;
+}
+
+/* -- footer ---------------------------------------------------------- */
+
+footer {
+  border-top: 1px solid var(--border);
+  padding: 40px 0 56px;
+  font-size: 0.92rem;
+}
+
+.foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 26px;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.foot nav {
+  display: flex;
+  gap: 22px;
+  flex-wrap: wrap;
+}
+
+.foot a {
+  color: var(--body);
+  text-decoration: none;
+}
+
+.foot a:hover {
+  color: var(--violet);
+}
+
+/* -- legal pages ----------------------------------------------------- */
+
+.legal {
+  padding: 56px 0 72px;
+  max-width: 72ch;
+}
+
+.legal h2 {
+  font-size: 1.35rem;
+  margin-top: 2.2em;
+}
+
+.legal ul {
+  padding-left: 1.2em;
+}
+
+.legal li {
+  margin-bottom: 0.5em;
+}
+
+.updated {
+  color: var(--body);
+  font-size: 0.92rem;
+}
+
+.callout {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--violet);
+  border-radius: 10px;
+  padding: 18px 20px;
+  margin: 24px 0;
+}
+
+.callout p:last-child {
+  margin-bottom: 0;
+}

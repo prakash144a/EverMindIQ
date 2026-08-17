@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from enum import Enum
 
 from pydantic import BaseModel, Field
 
@@ -56,6 +57,78 @@ class UserProfile(BaseModel):
         return bool(self.email and self.email_verified)
 
 
+class UserTier(str, Enum):
+    free = "free"
+    premium = "premium"
+
+
+# Cap the device/lineage trails. They exist to make a history legible in the
+# admin console, not to be a complete audit trail, and an unbounded list on a
+# hot document is a slow leak.
+MAX_TRAIL = 20
+
+
+class UserStats(BaseModel):
+    """Operator-facing view of one account: counters, tier, device, lineage.
+
+    Lives in the top-level ``userStats`` collection, deliberately NOT as a field
+    on ``users/{uid}``. That document is client-writable by its owner (see
+    ``firestore.rules``), so a ``tier`` stored there could be self-granted from
+    the app. Everything here is written only by the server.
+    """
+
+    uid: str
+    tier: UserTier = UserTier.free
+    tier_updated_at: datetime | None = None
+    tier_updated_by: str = ""
+    note: str = ""
+
+    # Denormalized from the profile so listing users costs one read per row
+    # instead of a second lookup each.
+    preferred_name: str = ""
+    preferred_name_lower: str = ""
+    email: str = ""
+    email_verified: bool = False
+
+    install_id: str = ""
+    install_ids: list[str] = Field(default_factory=list)
+    platform: str = ""
+    app_version: str = ""
+
+    # Signing in to an existing account merges it onto the caller's *current*
+    # uid and deletes the old one, so uids churn. Without this trail an
+    # account's history would vanish every time someone signed back in.
+    previous_uids: list[str] = Field(default_factory=list)
+
+    recordings_count: int = 0
+    total_duration_sec: float = 0.0
+    # High-water mark: the longest recording ever made, never decremented on
+    # delete (you cannot decrement a max without rescanning). That is also the
+    # more useful statistic for "how long do people expect to record for".
+    max_duration_sec: float = 0.0
+    feedback_count: int = 0
+
+    created_at: datetime = Field(default_factory=_utcnow)
+    signup_day: date = Field(default_factory=lambda: _utcnow().date())
+    first_recorded_at: datetime | None = None
+    last_recording_at: datetime | None = None
+    last_active_at: datetime = Field(default_factory=_utcnow)
+    last_active_day: date = Field(default_factory=lambda: _utcnow().date())
+
+    # Lets a future backfill find documents written by an older shape.
+    stats_version: int = 1
+
+    def touch_trail(self, install_id: str) -> None:
+        """Record a device against this account, newest last, without duplicates."""
+        if not install_id:
+            return
+        self.install_id = install_id
+        if install_id in self.install_ids:
+            self.install_ids.remove(install_id)
+        self.install_ids.append(install_id)
+        del self.install_ids[:-MAX_TRAIL]
+
+
 class OtpChallenge(BaseModel):
     """A pending email verification.
 
@@ -99,10 +172,13 @@ class ProfileView(BaseModel):
 
 
 __all__ = [
+    "MAX_TRAIL",
     "OtpChallenge",
     "ProfileView",
     "UserProfile",
     "UserSettings",
+    "UserStats",
+    "UserTier",
     "is_email",
     "normalize_email",
 ]

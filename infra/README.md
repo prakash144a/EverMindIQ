@@ -33,6 +33,28 @@ terraform apply \
 Then deploy the backend image (CI does this on push to main) and re-apply with
 `-var="container_image=REGION-docker.pkg.dev/PROJECT/voiceiq/api:TAG"`.
 
+### Variables are split across two files
+
+This repository is **public**, so anything that should not be is kept out of it:
+
+| File | Committed? | Holds |
+|---|---|---|
+| `terraform.tfvars` | yes | project, region, bucket, image tag, CORS origins |
+| `secrets.auto.tfvars` | **no** (gitignored) | `billing_account`, `admin_emails` |
+
+Terraform auto-loads any `*.auto.tfvars`, so `terraform apply` needs no extra flags — but after a
+fresh clone you must recreate the secrets file, or `apply` will prompt for `billing_account` and the
+admin allowlist will be empty (which denies everyone from `/admin`, by design).
+
+```hcl
+# infra/secrets.auto.tfvars
+billing_account = "XXXXXX-XXXXXX-XXXXXX"
+admin_emails    = "you@example.com"
+```
+
+`admin_emails` is kept private not because the address is a secret, but because publishing it names
+the exact account worth attacking to reach the admin console.
+
 ## CI/CD (GitHub Actions)
 
 The `deploy` job in `.github/workflows/ci.yml` builds the image to Artifact Registry, deploys Cloud
