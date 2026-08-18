@@ -1,0 +1,16 @@
+# What `gcloud builds submit` must not upload. The Dockerfile only copies
+# pyproject.toml and app/, so everything else is dead weight on the wire —
+# .venv and wheelhouse alone are ~100 MB.
+.git
+.gitignore
+.venv/
+wheelhouse/
+tests/
+*.egg-info/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+OFFLINE_INSTALL.md
+README.md
