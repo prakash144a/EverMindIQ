@@ -8,6 +8,7 @@ import '../../core/config.dart';
 import '../../core/tokens.dart';
 import '../../data/ai_conversation.dart';
 import '../../data/auth.dart';
+import '../../widgets/immersive_chrome.dart';
 
 /// Live voice mode — a hands-free, streaming-style conversation with the memory
 /// AI. Opening it starts listening; you speak, it recalls, and the answer is
@@ -189,50 +190,52 @@ class _VoiceModeScreenState extends ConsumerState<VoiceModeScreen> {
   Widget build(BuildContext context) {
     // Normalize the mic level (~ -2..10 on Android) into 0..1 for the splash.
     final norm = ((_level + 2) / 12).clamp(0.0, 1.0);
-    return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment(0, -0.35),
-            radius: 1.2,
-            colors: [Color(0xFF2A2154), Color(0xFF0C0918)],
+    return ImmersiveChrome(
+      child: Scaffold(
+        body: Container(
+          decoration: const BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment(0, -0.35),
+              radius: 1.2,
+              colors: [AppColors.immersiveTop, AppColors.immersiveBottom],
+            ),
           ),
-        ),
-        child: SafeArea(
-          child: Column(
-            children: [
-              Align(
-                alignment: Alignment.centerRight,
-                child: IconButton(
-                  icon: const Icon(Icons.close, color: Colors.white70),
-                  onPressed: _end,
+          child: SafeArea(
+            child: Column(
+              children: [
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white70),
+                    onPressed: _end,
+                  ),
                 ),
-              ),
-              const Spacer(),
-              _VoiceSplash(phase: _phase, level: norm),
-              const SizedBox(height: Insets.xxl),
-              Text(
-                _label,
-                style: const TextStyle(
-                    color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: Insets.sm),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: Insets.xxl),
-                child: Text(
-                  _phase == _Phase.error
-                      ? "This device has no speech recognizer. Go back and type instead."
-                      : 'Speak naturally — ask anything about your memories.',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white54, fontSize: 13),
+                const Spacer(),
+                _VoiceSplash(phase: _phase, level: norm),
+                const SizedBox(height: Insets.xxl),
+                Text(
+                  _label,
+                  style: const TextStyle(
+                      color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
                 ),
-              ),
-              const Spacer(),
-              Padding(
-                padding: const EdgeInsets.only(bottom: Insets.xxl),
-                child: _EndButton(onTap: _end),
-              ),
-            ],
+                const SizedBox(height: Insets.sm),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: Insets.xxl),
+                  child: Text(
+                    _phase == _Phase.error
+                        ? "This device has no speech recognizer. Go back and type instead."
+                        : 'Speak naturally — ask anything about your memories.',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white54, fontSize: 13),
+                  ),
+                ),
+                const Spacer(),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: Insets.xxl),
+                  child: _EndButton(onTap: _end),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -264,7 +267,7 @@ class _VoiceSplash extends StatelessWidget {
             height: base + reactive * 130,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: AppColors.violet.withValues(alpha: 0.10),
+              color: AppColors.sage.withValues(alpha: 0.10),
             ),
           ),
           AnimatedContainer(
@@ -273,7 +276,7 @@ class _VoiceSplash extends StatelessWidget {
             height: base + reactive * 70,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: AppColors.violet.withValues(alpha: 0.18),
+              color: AppColors.sage.withValues(alpha: 0.18),
             ),
           ),
           Container(
@@ -284,12 +287,12 @@ class _VoiceSplash extends StatelessWidget {
               gradient: const RadialGradient(
                 center: Alignment(-0.3, -0.4),
                 radius: 0.95,
-                colors: [Color(0xFFE4DBFF), AppColors.violet, AppColors.violetDeep],
+                colors: [AppColors.sageMist, AppColors.sage, AppColors.sageDeep],
                 stops: [0.0, 0.55, 1.0],
               ),
               boxShadow: [
                 BoxShadow(
-                  color: AppColors.violet.withValues(alpha: 0.55),
+                  color: AppColors.sage.withValues(alpha: 0.55),
                   blurRadius: 50,
                   spreadRadius: 4,
                 ),

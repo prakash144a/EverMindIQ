@@ -4,7 +4,7 @@ import '../core/tokens.dart';
 import '../data/models.dart';
 import 'formatting.dart';
 
-/// The hero "On This Day" card — a violet-washed keepsake with the resurfacing
+/// The hero "On This Day" card — a sage-washed keepsake with the resurfacing
 /// reason, the memory title in Fraunces, a short summary and the date.
 class MemoryCard extends StatelessWidget {
   const MemoryCard(this.item, {super.key, this.onTap});
@@ -27,7 +27,7 @@ class MemoryCard extends StatelessWidget {
             gradient: AppColors.heroWash,
             boxShadow: [
               BoxShadow(
-                color: AppColors.violet.withValues(alpha: 0.35),
+                color: AppColors.sage.withValues(alpha: 0.35),
                 blurRadius: 24,
                 offset: const Offset(0, 12),
               ),

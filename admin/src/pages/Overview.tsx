@@ -105,7 +105,7 @@ export function Overview() {
                     borderRadius: 8,
                   }}
                 />
-                <Bar dataKey="count" fill="var(--violet)" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="count" fill="var(--sage)" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           ) : (
@@ -142,8 +142,8 @@ function DailyArea({ points }: { points: { day: string; value: number }[] }) {
         <Area
           type="monotone"
           dataKey="value"
-          stroke="var(--violet)"
-          fill="var(--violet)"
+          stroke="var(--sage)"
+          fill="var(--sage)"
           fillOpacity={0.18}
         />
       </AreaChart>

@@ -3,11 +3,14 @@ import 'package:google_fonts/google_fonts.dart';
 
 import 'tokens.dart';
 
-/// MemoriesIQ theme — Refined violet keepsake. Material 3, light + dark.
+/// MemoriesIQ theme — Sage & gold keepsake. Material 3, light + dark.
 ///
 /// Typography pairs **Fraunces** (a soft serif) for titles and memory content
 /// with **Inter** for UI/body text. Gold is wired to `tertiary` so it stays a
 /// deliberate accent (milestones, highlights) rather than a second brand colour.
+///
+/// Neither factory takes arguments: the palette is fixed, and which of the two
+/// applies is [MaterialApp.themeMode]'s job — see `themeModeProvider`.
 class AppTheme {
   static ThemeData light() => _base(Brightness.light);
   static ThemeData dark() => _base(Brightness.dark);
@@ -16,12 +19,23 @@ class AppTheme {
     final isDark = brightness == Brightness.dark;
 
     final scheme = ColorScheme.fromSeed(
-      seedColor: AppColors.violet,
+      seedColor: AppColors.sage,
       brightness: brightness,
     ).copyWith(
-      primary: isDark ? AppColors.violetLight : AppColors.violet,
-      tertiary: AppColors.gold,
+      // fromSeed doesn't recompute the `on*` pairs when their colour is
+      // overridden, so they're set by hand. White fails on both sageLight
+      // (2.1:1) and gold (3.0:1); ink clears AA on both.
+      primary: isDark ? AppColors.sageLight : AppColors.sage,
+      onPrimary: isDark ? AppColors.ink : Colors.white,
+      primaryContainer:
+          isDark ? AppColors.sageSoftDark : AppColors.sageSoftLight,
+      onPrimaryContainer: isDark ? AppColors.sageLight : AppColors.sageDeep,
+      tertiary: isDark ? AppColors.goldLight : AppColors.gold,
+      onTertiary: AppColors.ink,
       surface: isDark ? AppColors.paperDark : AppColors.paperLight,
+      onSurface: isDark ? AppColors.inkDark : AppColors.ink,
+      surfaceContainerHigh: isDark ? AppColors.surfaceDark : Colors.white,
+      outlineVariant: isDark ? AppColors.borderDark : AppColors.borderLight,
     );
 
     final baseText =
@@ -61,7 +75,7 @@ class AppTheme {
       ),
       cardTheme: CardThemeData(
         elevation: 0,
-        color: isDark ? scheme.surfaceContainerHigh : Colors.white,
+        color: scheme.surfaceContainerHigh,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(Radii.lg)),
         clipBehavior: Clip.antiAlias,
         margin: EdgeInsets.zero,

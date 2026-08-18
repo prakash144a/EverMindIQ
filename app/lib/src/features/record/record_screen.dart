@@ -11,6 +11,7 @@ import 'package:record/record.dart';
 import '../../core/tokens.dart';
 import '../../data/models.dart';
 import '../../data/providers.dart';
+import '../../widgets/immersive_chrome.dart';
 import '../../widgets/formatting.dart';
 import '../../widgets/journal_picker.dart';
 import '../../widgets/waveform.dart';
@@ -189,43 +190,45 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      // Keeps the compose field above the keyboard in Write mode.
-      resizeToAvoidBottomInset: true,
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment(0, -0.5),
-            radius: 1.1,
-            colors: [Color(0xFF241C4A), Color(0xFF0F0B1E)],
+    return ImmersiveChrome(
+      child: Scaffold(
+        // Keeps the compose field above the keyboard in Write mode.
+        resizeToAvoidBottomInset: true,
+        body: Container(
+          decoration: const BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment(0, -0.5),
+              radius: 1.1,
+              colors: [AppColors.immersiveTop, AppColors.immersiveBottom],
+            ),
           ),
-        ),
-        child: SafeArea(
-          child: Column(
-            children: [
-              Align(
-                alignment: Alignment.centerLeft,
-                child: IconButton(
-                  icon: const Icon(Icons.close, color: Colors.white70),
-                  onPressed:
-                      _phase == _Phase.saving ? null : () => Navigator.of(context).maybePop(),
+          child: SafeArea(
+            child: Column(
+              children: [
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white70),
+                    onPressed:
+                        _phase == _Phase.saving ? null : () => Navigator.of(context).maybePop(),
+                  ),
                 ),
-              ),
-              _ModeSwitch(
-                mode: _mode,
-                // Locked mid-capture: switching away from a live recording or a
-                // save in flight would strand it.
-                onChanged: _phase == _Phase.idle
-                    ? (m) => setState(() {
-                          _mode = m;
-                          _error = null;
-                        })
-                    : null,
-              ),
-              Expanded(
-                child: _mode == _Mode.voice ? _buildVoiceBody() : _buildTextBody(),
-              ),
-            ],
+                _ModeSwitch(
+                  mode: _mode,
+                  // Locked mid-capture: switching away from a live recording or a
+                  // save in flight would strand it.
+                  onChanged: _phase == _Phase.idle
+                      ? (m) => setState(() {
+                            _mode = m;
+                            _error = null;
+                          })
+                      : null,
+                ),
+                Expanded(
+                  child: _mode == _Mode.voice ? _buildVoiceBody() : _buildTextBody(),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -353,7 +356,7 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
                 : const Icon(Icons.check_rounded),
             label: Text(saving ? 'Saving & indexing…' : 'Save memory'),
             style: FilledButton.styleFrom(
-              backgroundColor: AppColors.violet,
+              backgroundColor: AppColors.sage,
               foregroundColor: Colors.white,
               padding: const EdgeInsets.symmetric(vertical: Insets.md),
             ),
@@ -615,7 +618,7 @@ class _MicButtonState extends State<_MicButton> with SingleTickerProviderStateMi
                       : AppColors.heroWash,
                   boxShadow: [
                     BoxShadow(
-                      color: (recording ? const Color(0xFFE5484D) : AppColors.violet)
+                      color: (recording ? const Color(0xFFE5484D) : AppColors.sage)
                           .withValues(alpha: 0.55),
                       blurRadius: 40,
                       spreadRadius: 4,

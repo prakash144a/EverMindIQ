@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/tokens.dart';
 
-/// A large primary action for the home dock. [filled] is the solid violet
+/// A large primary action for the home dock. [filled] is the solid sage
 /// Record button; the outlined variant (Recall) reads as secondary but equal
 /// in size. Wrap each in an [Expanded] inside a [Row].
 class HeroActionButton extends StatelessWidget {
@@ -29,7 +29,7 @@ class HeroActionButton extends StatelessWidget {
       color: bg,
       borderRadius: BorderRadius.circular(Radii.pill),
       elevation: filled ? 1 : 0,
-      shadowColor: AppColors.violet.withValues(alpha: 0.35),
+      shadowColor: AppColors.sage.withValues(alpha: 0.35),
       child: InkWell(
         borderRadius: BorderRadius.circular(Radii.pill),
         onTap: onTap,

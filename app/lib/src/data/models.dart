@@ -360,12 +360,19 @@ class UserSettings {
   final String answerLanguage;
   final int retentionDays;
 
+  /// 'system' | 'light' | 'dark'. Kept as a raw string because this file is
+  /// pure Dart with no Flutter import; `ThemeModeStore` maps it to a ThemeMode
+  /// and normalises anything unrecognised.
+  final String themeMode;
+
   UserSettings({
     required this.onThisDayEnabled,
     required this.slideshowIntervalSec,
     required this.notificationsEnabled,
     required this.answerLanguage,
     required this.retentionDays,
+    // Optional so adding it doesn't break existing call sites.
+    this.themeMode = 'system',
   });
 
   factory UserSettings.fromJson(Map<String, dynamic> j) => UserSettings(
@@ -374,6 +381,7 @@ class UserSettings {
         notificationsEnabled: j['notifications_enabled'] as bool? ?? true,
         answerLanguage: j['answer_language'] as String? ?? 'auto',
         retentionDays: j['retention_days'] as int? ?? 0,
+        themeMode: j['theme_mode'] as String? ?? 'system',
       );
 
   Map<String, dynamic> toJson() => {
@@ -382,6 +390,7 @@ class UserSettings {
         'notifications_enabled': notificationsEnabled,
         'answer_language': answerLanguage,
         'retention_days': retentionDays,
+        'theme_mode': themeMode,
       };
 
   UserSettings copyWith({
@@ -390,6 +399,7 @@ class UserSettings {
     bool? notificationsEnabled,
     String? answerLanguage,
     int? retentionDays,
+    String? themeMode,
   }) =>
       UserSettings(
         onThisDayEnabled: onThisDayEnabled ?? this.onThisDayEnabled,
@@ -397,5 +407,6 @@ class UserSettings {
         notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
         answerLanguage: answerLanguage ?? this.answerLanguage,
         retentionDays: retentionDays ?? this.retentionDays,
+        themeMode: themeMode ?? this.themeMode,
       );
 }

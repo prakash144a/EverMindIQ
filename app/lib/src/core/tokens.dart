@@ -1,27 +1,41 @@
 import 'package:flutter/material.dart';
 
 /// Design tokens for MemoriesIQ — the single source of truth for the brand's
-/// colours, spacing, radii and motion. "Refined violet keepsake" identity:
-/// a warm indigo-violet with a gold accent reserved for milestones/highlights.
+/// colours, spacing, radii and motion. "Sage & gold keepsake" identity: a calm
+/// sage green with a gold accent reserved for milestones/highlights.
 class AppColors {
   const AppColors._();
 
-  static const violet = Color(0xFF6C5CE7); // primary
-  static const violetDeep = Color(0xFF4A3DB8); // gradients, pressed states
-  static const violetLight = Color(0xFF9A8CFF); // primary on dark grounds
-  static const gold = Color(0xFFF4B740); // accent — milestones ⭐ / highlights
+  static const sage = Color(0xFF40835A); // primary on light grounds
+  static const sageDeep = Color(0xFF2F6647); // gradients, pressed states
+  static const sageLight = Color(0xFF83BE9B); // primary on dark grounds
+  static const sageMist = Color(0xFFD8EEE0); // highlight inside orb gradients
 
-  // Neutrals carry a slight violet bias so they read as chosen, not default grey.
-  static const inkLight = Color(0xFF1E1A2B);
-  static const paperLight = Color(0xFFF7F4FD);
-  static const paperDark = Color(0xFF100D1A);
-  static const surfaceDark = Color(0xFF191527);
+  static const gold = Color(0xFFC08A2C); // accent — milestones ⭐ / highlights
+  static const goldLight = Color(0xFFE0B457); // accent on dark grounds
 
-  /// Soft violet→deep-violet wash used on hero memory cards and the AI orb.
+  // Neutrals carry a slight green bias so they read as chosen, not default grey.
+  static const ink = Color(0xFF14201A);
+  static const inkDark = Color(0xFFEAF2EC);
+  static const paperLight = Color(0xFFF5F9F6);
+  static const paperDark = Color(0xFF0F1613);
+  static const surfaceDark = Color(0xFF18211C);
+  static const borderLight = Color(0xFFE1EAE4);
+  static const borderDark = Color(0xFF26332B);
+  static const sageSoftLight = Color(0xFFE7F2EA); // tints, chips
+  static const sageSoftDark = Color(0xFF1A2922);
+
+  // The ground the record/recall/voice screens paint themselves on. Those
+  // screens are dark by design in either theme, so this pair is deliberately
+  // outside the light/dark split.
+  static const immersiveTop = Color(0xFF1A3627);
+  static const immersiveBottom = Color(0xFF080F0B);
+
+  /// Soft sage→deep-sage wash used on hero memory cards and the AI orb.
   static const LinearGradient heroWash = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [violetDeep, violet],
+    colors: [sageDeep, sage],
   );
 }
 

@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../core/tokens.dart';
 
 /// A live recording waveform. Feed it a rolling buffer of normalized
-/// amplitudes (0..1, newest last) and it draws gold→violet bars that scroll
+/// amplitudes (0..1, newest last) and it draws gold→sage bars that scroll
 /// right as you speak.
 class WaveformView extends StatelessWidget {
   const WaveformView({
@@ -42,7 +42,7 @@ class WaveformView extends StatelessWidget {
                     gradient: const LinearGradient(
                       begin: Alignment.bottomCenter,
                       end: Alignment.topCenter,
-                      colors: [AppColors.violet, AppColors.gold],
+                      colors: [AppColors.sage, AppColors.gold],
                     ),
                   ),
                 ),

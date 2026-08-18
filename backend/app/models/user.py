@@ -4,6 +4,8 @@ import re
 from datetime import date, datetime, timezone
 from enum import Enum
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 # Deliberately permissive, and not pydantic's EmailStr — that needs the
@@ -25,6 +27,12 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# A Literal rather than an Enum: it serialises as a plain string through the
+# repository's ``model_dump(mode="json")`` with no extra machinery, and an
+# unknown value is rejected with a 422 instead of being stored.
+ThemeMode = Literal["system", "light", "dark"]
+
+
 class UserSettings(BaseModel):
     on_this_day_enabled: bool = True
     slideshow_interval_sec: int = 6
@@ -32,14 +40,18 @@ class UserSettings(BaseModel):
     # "auto" = answer in the language of the question; or an ISO code like "en".
     answer_language: str = "auto"
     retention_days: int = 0  # 0 = keep forever
+    # Which theme the app paints in; "system" follows the OS. Stored server-side
+    # so a second device inherits the choice.
+    theme_mode: ThemeMode = "system"
 
 
 class UserProfile(BaseModel):
     """Who the user is, once they've verified an email.
 
-    Kept separate from [UserSettings] because ``PUT /settings`` replaces the whole
-    settings document — a profile field living there would be wiped by any
-    settings toggle.
+    Kept separate from [UserSettings] because ``PUT /settings`` owns that whole
+    document — a profile field living there would be wiped by any settings
+    toggle. (The PUT now merges over omitted keys, but a stale value that *is*
+    present is still written through, so the separation still earns its keep.)
     """
 
     preferred_name: str = ""
@@ -197,6 +209,7 @@ __all__ = [
     "MAX_TRAIL",
     "OtpChallenge",
     "ProfileView",
+    "ThemeMode",
     "UserProfile",
     "UserSettings",
     "UserStats",

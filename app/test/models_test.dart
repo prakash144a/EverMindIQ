@@ -28,6 +28,13 @@ void main() {
     final back = s.copyWith(answerLanguage: 'en').toJson();
     expect(back['answer_language'], 'en');
     expect(back['on_this_day_enabled'], false);
+
+    // Absent from an older server's response -> the safe default.
+    expect(UserSettings.fromJson({}).themeMode, 'system');
+    expect(s.copyWith(themeMode: 'dark').toJson()['theme_mode'], 'dark');
+    // The model stays permissive; ThemeModeStore.decode is what normalises an
+    // unknown value, so a new server can't break an old client here.
+    expect(UserSettings.fromJson({'theme_mode': 'sepia'}).themeMode, 'sepia');
   });
 
   test('ChatAnswer parses citations', () {

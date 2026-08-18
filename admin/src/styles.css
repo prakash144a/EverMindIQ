@@ -1,12 +1,15 @@
 :root {
-  --violet: #6d4aff;
-  --violet-soft: #efeaff;
-  --ink: #16121f;
-  --body: #55506a;
-  --muted: #8b859d;
-  --bg: #f6f5fb;
+  --sage: #40835a;
+  --sage-deep: #2f6647;
+  --sage-soft: #e7f2ea;
+  /* Text on a --sage fill; a token because the dark theme flips the brand. */
+  --on-brand: #ffffff;
+  --ink: #14201a;
+  --body: #4c5c52;
+  --muted: #7e8f84;
+  --bg: #f5f9f6;
   --surface: #ffffff;
-  --border: #e4e0f0;
+  --border: #e1eae4;
   --green: #0f9d58;
   --amber: #b8860b;
   --red: #c62828;
@@ -15,15 +18,16 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --violet: #9b83ff;
-    --violet-soft: #241d43;
-    --ink: #f4f1fb;
-    --body: #c2bcd4;
-    --muted: #8b849e;
-    --bg: #0f0d17;
-    --surface: #17142370;
-    --surface: #181425;
-    --border: #2b2440;
+    --sage: #83be9b;
+    --sage-deep: #40835a;
+    --sage-soft: #1a2922;
+    --on-brand: #14201a;
+    --ink: #eaf2ec;
+    --body: #bcccc2;
+    --muted: #86988c;
+    --bg: #0f1613;
+    --surface: #18211c;
+    --border: #26332b;
     --green: #4ecf8b;
     --amber: #e2b23c;
     --red: #ff6b6b;
@@ -63,7 +67,7 @@ h3 {
 }
 
 a {
-  color: var(--violet);
+  color: var(--sage);
   text-decoration: none;
   cursor: pointer;
 }
@@ -81,16 +85,16 @@ button {
   padding: 7px 14px;
 }
 button:hover:not(:disabled) {
-  border-color: var(--violet);
+  border-color: var(--sage);
 }
 button:disabled {
   opacity: 0.5;
   cursor: default;
 }
 button.primary {
-  background: var(--violet);
-  border-color: var(--violet);
-  color: #fff;
+  background: var(--sage);
+  border-color: var(--sage);
+  color: var(--on-brand);
 }
 button.danger {
   color: var(--red);
@@ -138,7 +142,7 @@ select {
   width: 24px;
   height: 24px;
   border-radius: 50%;
-  background: radial-gradient(circle at 32% 28%, #b39dff, var(--violet) 60%, #4a2fd0);
+  background: radial-gradient(circle at 32% 28%, #a8d4b8, var(--sage) 60%, var(--sage-deep));
   flex: none;
 }
 
@@ -148,12 +152,12 @@ select {
   color: var(--body);
 }
 .sidebar a:hover {
-  background: var(--violet-soft);
+  background: var(--sage-soft);
   text-decoration: none;
 }
 .sidebar a.active {
-  background: var(--violet-soft);
-  color: var(--violet);
+  background: var(--sage-soft);
+  color: var(--sage);
   font-weight: 600;
 }
 
@@ -263,14 +267,14 @@ th.plain {
   cursor: default;
 }
 th:hover:not(.plain) {
-  color: var(--violet);
+  color: var(--sage);
 }
 
 tbody tr:last-child td {
   border-bottom: none;
 }
 tbody tr:hover {
-  background: var(--violet-soft);
+  background: var(--sage-soft);
 }
 
 td.wrap {
@@ -292,8 +296,8 @@ td.wrap {
   border: 1px solid var(--border);
 }
 .pill.premium {
-  background: var(--violet-soft);
-  color: var(--violet);
+  background: var(--sage-soft);
+  color: var(--sage);
   border-color: transparent;
 }
 .pill.anon {

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/tokens.dart';
 
-/// The MemoriesIQ AI presence: a luminous violet orb that breathes while idle and
+/// The MemoriesIQ AI presence: a luminous sage orb that breathes while idle and
 /// pulses a halo while [active] (listening / speaking). Hand-rolled with
 /// [AnimationController]s so it needs no animation package.
 class AiOrb extends StatefulWidget {
@@ -80,7 +80,7 @@ class _AiOrbState extends State<AiOrb> with TickerProviderStateMixin {
                       height: s * (1 + 0.45 * haloT),
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        border: Border.all(color: AppColors.violet.withValues(alpha: 0.5)),
+                        border: Border.all(color: AppColors.sage.withValues(alpha: 0.5)),
                       ),
                     ),
                   ),
@@ -94,12 +94,12 @@ class _AiOrbState extends State<AiOrb> with TickerProviderStateMixin {
                       gradient: const RadialGradient(
                         center: Alignment(-0.3, -0.4),
                         radius: 0.95,
-                        colors: [Color(0xFFE4DBFF), AppColors.violet, AppColors.violetDeep],
+                        colors: [AppColors.sageMist, AppColors.sage, AppColors.sageDeep],
                         stops: [0.0, 0.55, 1.0],
                       ),
                       boxShadow: [
                         BoxShadow(
-                          color: AppColors.violet.withValues(alpha: 0.55),
+                          color: AppColors.sage.withValues(alpha: 0.55),
                           blurRadius: 44,
                           spreadRadius: 2,
                         ),

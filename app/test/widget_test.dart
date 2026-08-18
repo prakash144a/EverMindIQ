@@ -9,5 +9,10 @@ void main() {
     await tester.pumpWidget(const ProviderScope(child: MemoriesIQApp()));
     await tester.pump();
     expect(find.byType(MaterialApp), findsOneWidget);
+    // The root reads the theme provider; booting must not depend on the network.
+    expect(
+      tester.widget<MaterialApp>(find.byType(MaterialApp)).themeMode,
+      ThemeMode.system,
+    );
   });
 }

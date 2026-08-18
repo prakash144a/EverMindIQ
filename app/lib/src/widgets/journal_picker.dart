@@ -8,9 +8,15 @@ import '../data/providers.dart';
 /// The palette a journal's `colorIndex` points into.
 ///
 /// Fixed and small on purpose: the point of the colour is to make a journal
-/// recognisable at a glance in a list, not to be decorated.
+/// recognisable at a glance in a list, not to be decorated. Deliberately holds
+/// no sage: the brand colour would read as a primary action, and it sits too
+/// close to the green to tell apart at swatch size.
+///
+/// The length is load-bearing — `colorIndex` is stored server-side and resolved
+/// modulo this list, so adding or removing an entry re-colours every existing
+/// journal.
 const journalColors = <Color>[
-  AppColors.violet,
+  Color(0xFF2E7D8C), // teal
   Color(0xFF2E9E7B), // green
   Color(0xFFD97706), // amber
   Color(0xFFDC5A7B), // rose

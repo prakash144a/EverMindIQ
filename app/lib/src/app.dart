@@ -3,19 +3,26 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/config.dart';
 import 'core/theme.dart';
+import 'core/theme_mode_store.dart';
 import 'data/auth.dart';
+import 'data/models.dart';
+import 'data/providers.dart';
+import 'data/theme_mode_provider.dart';
 import 'features/shell/app_shell.dart';
 
-class MemoriesIQApp extends StatelessWidget {
+class MemoriesIQApp extends ConsumerWidget {
   const MemoriesIQApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return MaterialApp(
       title: AppConfig.appName,
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
+      // Reads the on-device cache, which `main` resolved before the first
+      // frame; the account's copy is adopted later by [_SettingsSync].
+      themeMode: ref.watch(themeModeProvider),
       home: const _AuthGate(),
     );
   }
@@ -30,13 +37,41 @@ class _AuthGate extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final signIn = ref.watch(ensureSignedInProvider);
     return signIn.when(
-      data: (_) => const AppShell(),
+      data: (_) => const _SettingsSync(child: AppShell()),
       loading: () => const _SplashScreen(),
       error: (e, _) => _SignInErrorScreen(
         error: e,
         onRetry: () => ref.invalidate(ensureSignedInProvider),
       ),
     );
+  }
+}
+
+/// Applies the account's saved theme once settings load.
+///
+/// Sits below the auth gate on purpose: settings need a signed-in user, and the
+/// app must not wait on that to paint. Until this runs, the device's cached
+/// choice is already showing — so on every launch after the first, adopting the
+/// server value is a no-op the user never sees.
+class _SettingsSync extends ConsumerWidget {
+  const _SettingsSync({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    ref.listen<AsyncValue<UserSettings>>(settingsProvider, (_, next) {
+      final settings = next.valueOrNull;
+      if (settings != null) {
+        ref
+            .read(themeModeProvider.notifier)
+            .adoptFromServer(ThemeModeStore.decode(settings.themeMode));
+      }
+    });
+    // Starts the fetch and keeps it alive; the listener above fires on the
+    // loading -> data transition.
+    ref.watch(settingsProvider);
+    return child;
   }
 }
 

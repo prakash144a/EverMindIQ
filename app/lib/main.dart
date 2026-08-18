@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'firebase_options.dart';
 import 'src/app.dart';
 import 'src/core/device_identity.dart';
+import 'src/core/theme_mode_store.dart';
 import 'src/data/error_log.dart';
 
 Future<void> main() async {
@@ -30,6 +31,9 @@ Future<void> main() async {
   // Resolved before the first request so every call can read it synchronously.
   // Its own failures are already handled internally, so this cannot block boot.
   await DeviceIdentity.ensure();
+  // Before runApp so the very first frame is already in the chosen mode
+  // rather than flashing the OS default and correcting itself.
+  await ThemeModeStore.load();
 
   try {
     await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);

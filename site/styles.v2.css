@@ -4,24 +4,32 @@
    framework, no webfont request, no build step. */
 
 :root {
-  --violet: #6d4aff;
-  --violet-deep: #4a2fd0;
-  --ink: #16121f;
-  --body: #4a4458;
+  --sage: #40835a;
+  --sage-deep: #2f6647;
+  /* Text and icons sitting on a --sage fill. A token rather than a literal
+     because white fails contrast on the lighter sage the dark theme uses. */
+  --on-brand: #ffffff;
+  --ink: #14201a;
+  --body: #4a5a50;
   --bg: #ffffff;
-  --surface: #f7f5ff;
-  --border: #e6e1f5;
+  --surface: #f5f9f6;
+  --border: #e1eae4;
   --radius: 16px;
   --max: 1080px;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --ink: #f4f1fb;
-    --body: #b6b0c7;
-    --bg: #100d18;
-    --surface: #191330;
-    --border: #2a2340;
+    /* The brand colours flip too — #40835a on a near-black ground is about
+       2.4:1, so every accent-coloured word would fade out. */
+    --sage: #83be9b;
+    --sage-deep: #40835a;
+    --on-brand: #14201a;
+    --ink: #eaf2ec;
+    --body: #a7bcae;
+    --bg: #0f1613;
+    --surface: #18211c;
+    --border: #26332b;
   }
 }
 
@@ -70,7 +78,7 @@ p {
 }
 
 a {
-  color: var(--violet);
+  color: var(--sage);
 }
 
 .wrap {
@@ -107,7 +115,7 @@ header {
   width: 30px;
   height: 30px;
   border-radius: 50%;
-  background: radial-gradient(circle at 32% 28%, #9d7bff, var(--violet) 55%, var(--violet-deep));
+  background: radial-gradient(circle at 32% 28%, #a8d4b8, var(--sage) 55%, var(--sage-deep));
   flex: none;
 }
 
@@ -123,7 +131,7 @@ header {
 }
 
 .nav a:hover {
-  color: var(--violet);
+  color: var(--sage);
 }
 
 @media (max-width: 640px) {
@@ -149,8 +157,8 @@ header {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  background: var(--violet);
-  color: #fff;
+  background: var(--sage);
+  color: var(--on-brand);
   text-decoration: none;
   font-weight: 600;
   padding: 15px 30px;
@@ -160,7 +168,7 @@ header {
 }
 
 .cta:hover {
-  background: var(--violet-deep);
+  background: var(--sage-deep);
 }
 
 .cta-note {
@@ -210,8 +218,8 @@ section {
   width: 30px;
   height: 30px;
   border-radius: 50%;
-  background: var(--violet);
-  color: #fff;
+  background: var(--sage);
+  color: var(--on-brand);
   font-weight: 700;
   font-size: 0.9rem;
   margin-bottom: 14px;
@@ -238,7 +246,7 @@ summary::-webkit-details-marker {
 summary::after {
   content: "+";
   float: right;
-  color: var(--violet);
+  color: var(--sage);
   font-weight: 400;
   font-size: 1.3rem;
   line-height: 1;
@@ -280,7 +288,7 @@ footer {
 }
 
 .foot a:hover {
-  color: var(--violet);
+  color: var(--sage);
 }
 
 /* -- legal pages ----------------------------------------------------- */
@@ -311,7 +319,7 @@ footer {
 .callout {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--violet);
+  border-left: 3px solid var(--sage);
   border-radius: 10px;
   padding: 18px 20px;
   margin: 24px 0;

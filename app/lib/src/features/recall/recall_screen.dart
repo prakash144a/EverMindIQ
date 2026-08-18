@@ -6,6 +6,7 @@ import '../../core/tokens.dart';
 import '../../data/ai_conversation.dart';
 import '../../data/auth.dart';
 import '../../data/providers.dart';
+import '../../widgets/immersive_chrome.dart';
 import '../../widgets/journal_picker.dart';
 import '../../widgets/ai_orb.dart';
 import '../../widgets/audio_play_button.dart';
@@ -110,73 +111,75 @@ class _RecallScreenState extends ConsumerState<RecallScreen> {
   @override
   Widget build(BuildContext context) {
     final messages = _ai.messages;
-    return Scaffold(
-      resizeToAvoidBottomInset: true,
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment(0, -0.7),
-            radius: 1.2,
-            colors: [Color(0xFF241C4A), Color(0xFF0F0B1E)],
+    return ImmersiveChrome(
+      child: Scaffold(
+        resizeToAvoidBottomInset: true,
+        body: Container(
+          decoration: const BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment(0, -0.7),
+              radius: 1.2,
+              colors: [AppColors.immersiveTop, AppColors.immersiveBottom],
+            ),
           ),
-        ),
-        child: SafeArea(
-          child: Column(
-            children: [
-              Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.close, color: Colors.white70),
-                    onPressed: () => Navigator.of(context).maybePop(),
-                  ),
-                  const Text('Recall',
-                      style: TextStyle(
-                          color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
-                  const Spacer(),
-                  if (!_ai.connected)
-                    TextButton(onPressed: _ai.connect, child: const Text('Reconnect')),
-                ],
-              ),
-              Padding(
-                padding: const EdgeInsets.only(top: Insets.sm, bottom: Insets.md),
-                child: Column(
+          child: SafeArea(
+            child: Column(
+              children: [
+                Row(
                   children: [
-                    AiOrb(size: 76, active: _ai.thinking || messages.isEmpty),
-                    const SizedBox(height: Insets.sm),
-                    Text(
-                      _ai.thinking
-                          ? 'Recalling…'
-                          : (messages.isEmpty ? 'Ask about your past' : 'Tap the mic to talk'),
-                      style: const TextStyle(
-                          color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.w600),
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white70),
+                      onPressed: () => Navigator.of(context).maybePop(),
                     ),
+                    const Text('Recall',
+                        style: TextStyle(
+                            color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
+                    const Spacer(),
+                    if (!_ai.connected)
+                      TextButton(onPressed: _ai.connect, child: const Text('Reconnect')),
                   ],
                 ),
-              ),
-              Expanded(
-                child: messages.isEmpty
-                    ? const _RecallHint()
-                    : ListView.builder(
-                        controller: _scroll,
-                        padding: const EdgeInsets.fromLTRB(Insets.lg, 0, Insets.lg, Insets.sm),
-                        itemCount: messages.length + (_ai.thinking ? 1 : 0),
-                        itemBuilder: (_, i) {
-                          if (i == messages.length) return const _ThinkingRow();
-                          return _Bubble(messages[i], onAskEverything: _askEverything);
-                        },
+                Padding(
+                  padding: const EdgeInsets.only(top: Insets.sm, bottom: Insets.md),
+                  child: Column(
+                    children: [
+                      AiOrb(size: 76, active: _ai.thinking || messages.isEmpty),
+                      const SizedBox(height: Insets.sm),
+                      Text(
+                        _ai.thinking
+                            ? 'Recalling…'
+                            : (messages.isEmpty ? 'Ask about your past' : 'Tap the mic to talk'),
+                        style: const TextStyle(
+                            color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.w600),
                       ),
-              ),
-              _ScopeChip(
-                label: _scopeLabel,
-                onTap: _pickScope,
-              ),
-              _InputBar(
-                controller: _controller,
-                focusNode: _inputFocus,
-                onMicTap: _openVoiceMode,
-                onSend: _send,
-              ),
-            ],
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: messages.isEmpty
+                      ? const _RecallHint()
+                      : ListView.builder(
+                          controller: _scroll,
+                          padding: const EdgeInsets.fromLTRB(Insets.lg, 0, Insets.lg, Insets.sm),
+                          itemCount: messages.length + (_ai.thinking ? 1 : 0),
+                          itemBuilder: (_, i) {
+                            if (i == messages.length) return const _ThinkingRow();
+                            return _Bubble(messages[i], onAskEverything: _askEverything);
+                          },
+                        ),
+                ),
+                _ScopeChip(
+                  label: _scopeLabel,
+                  onTap: _pickScope,
+                ),
+                _InputBar(
+                  controller: _controller,
+                  focusNode: _inputFocus,
+                  onMicTap: _openVoiceMode,
+                  onSend: _send,
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -202,7 +205,7 @@ class _Bubble extends StatelessWidget {
         padding: const EdgeInsets.all(Insets.md),
         constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.82),
         decoration: BoxDecoration(
-          color: isUser ? AppColors.violet : Colors.white.withValues(alpha: 0.08),
+          color: isUser ? AppColors.sage : Colors.white.withValues(alpha: 0.08),
           borderRadius: BorderRadius.only(
             topLeft: const Radius.circular(Radii.md),
             topRight: const Radius.circular(Radii.md),
@@ -256,7 +259,7 @@ class _ScopeFooter extends StatelessWidget {
               padding: EdgeInsets.symmetric(vertical: 2),
               child: Text('Ask all memories',
                   style: TextStyle(
-                      color: AppColors.violetLight, fontSize: 11.5, fontWeight: FontWeight.w600)),
+                      color: AppColors.sageLight, fontSize: 11.5, fontWeight: FontWeight.w600)),
             ),
           ),
         ],
