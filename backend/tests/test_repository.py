@@ -14,6 +14,7 @@ from datetime import date, datetime, timezone
 import pytest
 
 from app.models.feedback import Feedback
+from app.models.journal import Journal
 from app.models.recording import Chunk, Recording, RecordingStatus
 from app.models.user import UserProfile, UserSettings, is_email, normalize_email
 from app.services.firestore import (
@@ -207,6 +208,7 @@ def test_merging_a_uid_into_itself_is_a_no_op():
 
     assert repo.merge_user("alice", "alice") == {
         "recordings": 0,
+        "journals": 0,
         "feedback": 0,
         "insights": 0,
         "feeds": 0,
@@ -259,3 +261,67 @@ def test_recorded_at_ordering_survives_iso_string_storage():
 
     listed = repo.list_recordings("alice")
     assert [r.recorded_at.hour for r in listed] == [12, 10, 8]
+
+
+# -- journals ------------------------------------------------------------
+
+
+def test_journals_survive_a_restore_still_holding_their_memories():
+    """Restore-after-reinstall must bring the filing back, not just the files.
+
+    `journal_id` is denormalized onto each recording, so a merge that moved the
+    recordings but left the journals behind would return every memory pointing
+    at a container that no longer exists — filed, and yet in nothing.
+    """
+    repo = Repository()
+    repo.save_journal("account", Journal(id="j1", name="Travel"))
+    repo.add_recording(make_recording("account", "r1", journal_id="j1"))
+
+    moved = repo.merge_user("account", "throwaway")
+
+    assert moved["journals"] == 1
+    assert [j.name for j in repo.list_journals("throwaway")] == ["Travel"]
+    assert repo.list_journals("account") == []
+    assert repo.list_recordings("throwaway", journal_id="j1")[0].id == "r1"
+
+
+def test_deleting_an_account_purges_its_journals():
+    repo = Repository()
+    repo.save_journal("alice", Journal(id="j1", name="Travel"))
+
+    repo.delete_user("alice")
+
+    assert repo.list_journals("alice") == []
+
+
+def test_journals_stay_scoped_to_their_owner():
+    repo = Repository()
+    repo.save_journal("alice", Journal(id="j1", name="Travel"))
+
+    assert repo.list_journals("bob") == []
+    assert repo.get_journal("bob", "j1") is None
+
+
+def test_an_empty_journal_filter_selects_only_unfiled_recordings():
+    """`""` means unfiled; `None` means no filter. Collapsing them would make
+    the Unfiled view — the only route to the pre-journals backlog — impossible."""
+    repo = Repository()
+    repo.add_recording(make_recording("alice", "filed", journal_id="j1"))
+    repo.add_recording(make_recording("alice", "loose"))
+
+    assert {r.id for r in repo.list_recordings("alice")} == {"filed", "loose"}
+    assert [r.id for r in repo.list_recordings("alice", journal_id="")] == ["loose"]
+    assert [r.id for r in repo.list_recordings("alice", journal_id="j1")] == ["filed"]
+
+
+def test_deleting_a_journal_unfiles_without_deleting():
+    repo = Repository()
+    repo.save_journal("alice", Journal(id="j1", name="Travel"))
+    repo.add_recording(make_recording("alice", "r1", journal_id="j1"))
+    repo.add_recording(make_recording("alice", "r2", journal_id="j1"))
+    repo.add_recording(make_recording("alice", "r3"))
+
+    assert repo.delete_journal("alice", "j1") == 2
+    assert repo.get_journal("alice", "j1") is None
+    assert len(repo.list_recordings("alice")) == 3
+    assert {r.journal_id for r in repo.list_recordings("alice")} == {""}

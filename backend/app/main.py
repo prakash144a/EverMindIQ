@@ -21,6 +21,7 @@ from app.api.routers import (
     feedback,
     insights,
     internal,
+    journals,
     live,
     memories,
     mock_storage,
@@ -92,6 +93,7 @@ def create_app() -> FastAPI:
 
     app.include_router(uploads.router)
     app.include_router(recordings.router)
+    app.include_router(journals.router)
     app.include_router(chat.router)
     app.include_router(insights.router)
     app.include_router(memories.router)

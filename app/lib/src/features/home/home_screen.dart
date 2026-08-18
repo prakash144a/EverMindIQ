@@ -12,6 +12,7 @@ import '../../widgets/memory_card.dart';
 import '../../widgets/milestone_star_button.dart';
 import '../../widgets/section_header.dart';
 import '../../widgets/states.dart';
+import '../memory/memory_detail_screen.dart';
 import '../menu/milestones_screen.dart';
 import '../shell/app_shell.dart';
 
@@ -212,31 +213,38 @@ class _MilestoneChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
-      width: 150,
-      padding: const EdgeInsets.all(Insets.md),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest,
+    return Material(
+      color: scheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(Radii.md),
+      child: InkWell(
         borderRadius: BorderRadius.circular(Radii.md),
-        border: Border.all(color: scheme.outlineVariant),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.star_rounded, color: scheme.tertiary, size: 18),
-          const Spacer(),
-          Text(
-            rec.title.isEmpty ? 'Milestone' : rec.title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+        onTap: () => openMemoryDetail(context, rec.id),
+        child: Container(
+          width: 150,
+          padding: const EdgeInsets.all(Insets.md),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(Radii.md),
+            border: Border.all(color: scheme.outlineVariant),
           ),
-          const SizedBox(height: 2),
-          Text(
-            prettyDate(rec.eventDate),
-            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 11),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.star_rounded, color: scheme.tertiary, size: 18),
+              const Spacer(),
+              Text(
+                rec.title.isEmpty ? 'Milestone' : rec.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                prettyDate(rec.eventDate),
+                style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 11),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -249,67 +257,76 @@ class _RecordingTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.all(Insets.md),
-      decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
+    return Material(
+      color: Theme.of(context).cardColor,
+      borderRadius: BorderRadius.circular(Radii.md),
+      child: InkWell(
         borderRadius: BorderRadius.circular(Radii.md),
-        border: Border.all(color: scheme.outlineVariant),
-      ),
-      child: Row(
-        children: [
-          AudioPlayButton(recordingId: rec.id),
-          const SizedBox(width: Insets.md),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  rec.title.isEmpty ? 'New recording' : rec.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-                // Only shown until the pipeline has produced a real title.
-                if (isProcessing(rec.status)) ...[
-                  const SizedBox(height: 3),
-                  Row(
-                    children: [
-                      SizedBox(
-                        width: 10,
-                        height: 10,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 1.6,
-                          color: scheme.onSurfaceVariant,
-                        ),
+        onTap: () => openMemoryDetail(context, rec.id),
+        child: Container(
+          padding: const EdgeInsets.all(Insets.md),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(Radii.md),
+            border: Border.all(color: scheme.outlineVariant),
+          ),
+          child: Row(
+            children: [
+              rec.hasAudio ? AudioPlayButton(recordingId: rec.id) : const TextMemoryGlyph(),
+              const SizedBox(width: Insets.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      rec.title.isEmpty
+                          ? (rec.hasAudio ? 'New recording' : 'New written memory')
+                          : rec.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    // Only shown until the pipeline has produced a real title.
+                    if (isProcessing(rec.status)) ...[
+                      const SizedBox(height: 3),
+                      Row(
+                        children: [
+                          SizedBox(
+                            width: 10,
+                            height: 10,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 1.6,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            statusLabel(rec.status, source: rec.source),
+                            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 6),
+                    ] else if (rec.status == 'failed') ...[
+                      const SizedBox(height: 3),
                       Text(
                         statusLabel(rec.status),
-                        style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+                        style: TextStyle(color: scheme.error, fontSize: 12),
                       ),
                     ],
-                  ),
-                ] else if (rec.status == 'failed') ...[
-                  const SizedBox(height: 3),
-                  Text(
-                    statusLabel(rec.status),
-                    style: TextStyle(color: scheme.error, fontSize: 12),
-                  ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: Insets.sm),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  MilestoneStarButton(rec),
+                  Text(relativeTime(rec.recordedAt),
+                      style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant)),
                 ],
-              ],
-            ),
-          ),
-          const SizedBox(width: Insets.sm),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              MilestoneStarButton(rec),
-              Text(relativeTime(rec.recordedAt),
-                  style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant)),
+              ),
             ],
           ),
-        ],
+        ),
       ),
     );
   }

@@ -79,3 +79,32 @@ def make_recording(client):
         return client.post("/recordings", json=payload, headers=auth(uid)).json()
 
     return _make
+
+
+@pytest.fixture
+def make_text_memory(client):
+    """Helper: create an indexed *typed* memory for `uid`.
+
+    No upload and no transcript seeding — the text is the transcript, which is
+    the whole point of the path this exercises.
+    """
+
+    def _make(uid: str, text: str, event_date: str | None = None):
+        payload: dict = {"text": text}
+        if event_date:
+            payload["event_date"] = event_date
+        resp = client.post("/recordings/text", json=payload, headers=auth(uid))
+        assert resp.status_code == 201, resp.text
+        return resp.json()
+
+    return _make
+
+
+def set_tier(uid: str, tier: str) -> None:
+    """Grant a tier the way the admin console does — server-side, never by the client."""
+    from app.models.user import UserTier
+    from app.services.firestore import get_repository
+
+    repo = get_repository()
+    repo.ensure_user_stats(uid)
+    repo.set_tier(uid, UserTier(tier), None, "test-admin")

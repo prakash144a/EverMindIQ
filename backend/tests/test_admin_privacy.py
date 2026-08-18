@@ -19,6 +19,9 @@ from app.models.admin import AdminRecordingRow, AdminUserDetail, AdminUserRow
 from tests.conftest import admin_auth, auth
 
 SECRET = "the pomegranate tree behind Amma's house in Madurai"
+# A journal name is user-authored and every bit as revealing as a transcript —
+# "Therapy", "Divorce", "Baby" describe a life without quoting a word of it.
+SECRET_JOURNAL = "Leaving Madurai"
 
 # Everything an admin can read. Kept in one place so a new endpoint is a
 # one-line addition rather than an untested gap.
@@ -53,10 +56,18 @@ CONTENT_FIELDS = {
     "chunks",
     "audio_url",
     "audio_path",
+    # A journal is a container the user named themselves. The id is opaque, but
+    # blocking it too keeps the rule simple: nothing about filing crosses into
+    # the operator surface.
+    "journal",
+    "journal_id",
+    "journal_name",
+    "journals",
 }
 
 
 def _seed(client, make_recording):
+    client.post("/journals", json={"name": SECRET_JOURNAL}, headers=auth("alice"))
     make_recording("alice", SECRET)
     client.get("/recordings", headers=auth("alice"))
 
@@ -69,11 +80,13 @@ def test_no_admin_response_contains_transcript_text(client, make_recording):
     # transcript was never stored.
     own = client.get("/recordings", headers=auth("alice"))
     assert SECRET in own.text
+    assert SECRET_JOURNAL in client.get("/journals", headers=auth("alice")).text
 
     for path in READ_PATHS:
         r = client.get(path, headers=admin_auth())
         assert r.status_code == 200, f"{path} -> {r.status_code} {r.text[:200]}"
         assert SECRET not in r.text, f"{path} leaked transcript content"
+        assert SECRET_JOURNAL not in r.text, f"{path} leaked a journal name"
 
 
 def test_admin_user_detail_exposes_metadata_but_not_content(client, make_recording):

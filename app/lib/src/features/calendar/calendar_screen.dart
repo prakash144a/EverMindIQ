@@ -5,6 +5,7 @@ import 'package:table_calendar/table_calendar.dart';
 
 import '../../data/models.dart';
 import '../../data/providers.dart';
+import '../memory/memory_detail_screen.dart';
 
 class CalendarScreen extends ConsumerStatefulWidget {
   const CalendarScreen({super.key});
@@ -69,13 +70,17 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
                       itemBuilder: (_, i) {
                         final r = dayItems[i];
                         return ListTile(
-                          leading: Icon(r.isMilestone ? Icons.star : Icons.graphic_eq),
+                          leading: Icon(r.isMilestone
+                              ? Icons.star
+                              : (r.hasAudio ? Icons.graphic_eq : Icons.notes_rounded)),
                           title: Text(r.title.isEmpty ? 'Untitled moment' : r.title),
                           subtitle: Text(
                             r.summary.isEmpty ? r.transcript : r.summary,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                           ),
+                          trailing: const Icon(Icons.chevron_right, size: 20),
+                          onTap: () => openMemoryDetail(context, r.id),
                         );
                       },
                     ),

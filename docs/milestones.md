@@ -3,8 +3,10 @@
 A living tracker for every phase and major work item. Update the status boxes as work lands.
 Aligns with the phased delivery in [architecture.md §8](./architecture.md).
 
-**Last updated:** 2026-08-17 (admin console live; backend `api:v10` deployed; CI green for the
-first time; committed as `f4f95f2`)
+**Last updated:** 2026-08-17 (journals shipped — named containers plus **journal-scoped recall**,
+the second and stronger premium entitlement; typed memories + memory detail view before them; admin
+console live; backend `api:v10` deployed — **not yet redeployed with the text or journal
+endpoints**)
 
 ## Status legend
 
@@ -15,7 +17,8 @@ first time; committed as `f4f95f2`)
 > **Big-picture state:** the core loop is **real** and there is now an **operator plane** over it. A
 > recording goes from a signed upload into the CMEK bucket, through Pub/Sub to real Gemini
 > transcription and enrichment, into Vertex embeddings and Firestore, and back out of a RAG query
-> with a citation — against live GCP, in under 10 seconds. An admin console reports who is using it.
+> with a citation — against live GCP, in under 10 seconds. A **typed** memory takes the same route
+> from enrichment onward. An admin console reports who is using it.
 > Mock mode remains the offline/test path. What's left is release readiness (Play listing, app
 > signing, CI deploy automation), the Phase 2 features that were only ever mocked, and the deferred
 > cost work in Phase 4.
@@ -30,7 +33,7 @@ first time; committed as `f4f95f2`)
 | GCP / Firebase | project `voiceiq-505205`, region `us-central1` |
 | Android package | `com.memoriesiq.app` (registered in Firebase; the old `com.example.voiceiq` app still exists and can be deleted once a build is confirmed) |
 | CI | green on `f4f95f2` — backend, app, admin all pass; `deploy` skipped (gated on `DEPLOY_ENABLED`) |
-| Tests | 227 backend, 51 app, `ruff check app tests` clean, `tsc --noEmit` clean |
+| Tests | 290 backend, 98 app, `ruff check app tests` clean, `tsc --noEmit` clean |
 
 > **Before running Terraform in a fresh clone:** `infra/secrets.auto.tfvars` is **gitignored** and
 > must be recreated — it holds `billing_account` and `admin_emails`. Without it `apply` prompts for
@@ -49,7 +52,13 @@ Ordered by what unblocks the most. (1) → (2) is the only real dependency; the 
 3. **Verify cross-lingual recall** — Cross-cutting. The load-bearing unverified assumption for the
    target users; needs one real non-English recording through the live pipeline.
 4. **Automate deploys in CI** — Phase 0. Every deploy so far has been manual.
-5. **Decide what premium unlocks** — Phase 3.5, product decision, currently a no-op label.
+5. **Decide what else premium unlocks** — Phase 3.5, product decision. It now gates typed-memory
+   length and journal count, so the machinery is real and there is something worth paying for; what
+   remains is whether it is *enough*, and there is still no purchase flow.
+
+> **Note:** the deployed image `api:v10` predates both `POST /recordings/text` and the whole
+> `/journals` surface. Write mode and Journals will 404 against production until the backend is
+> redeployed — which is another argument for (4).
 
 ---
 
@@ -79,9 +88,29 @@ Ordered by what unblocks the most. (1) → (2) is the only real dependency; the 
 ## Phase 1 — MVP
 
 - [x] Record a moment, with back-dating (`occurred_at`)
+- [x] **Type a memory instead of speaking it** — the capture screen now has a **Speak / Write**
+  toggle. A typed memory has no audio and no transcription: the text *is* the transcript, so
+  ingestion joins at enrichment (`pipeline/ingest.py` branches on `Recording.source`) and the memory
+  is enriched, embedded, indexed and recallable exactly like a spoken one. Enrichment now also
+  reports the detected language, because nothing upstream determined it — which matters most for the
+  users likeliest to type in Tamil or Hindi. New `POST /recordings/text`; the four places that
+  assumed audio (Home, Milestones, Calendar, Recall citations) check `hasAudio` first
 - [x] Calendar view of moments
 - [x] Talk-to-AI **text** chat (over the `/live` WebSocket)
 - [x] In-app **audio playback** of recordings (`GET /recordings/{id}/audio`)
+- [x] **Memory detail view** — every list row now opens the memory in full: the transcript (labelled
+  as AI-produced, since it is a best guess), the summary, people/places/tags/mood, the star, and
+  playback when there is audio. Reads from `recordingsProvider` by id rather than taking a snapshot,
+  so a transcript that lands while the screen is open appears. Before this the app had **no detail
+  screen at all** — a recording could be played but never read, and a typed memory could not be
+  revisited in any form. Tappable from Home recents, the milestone rail, Milestones, Calendar, and
+  Recall citations
+- [x] **Journals** — named containers, one per memory, filed by hand at capture and reassignable from
+  the memory detail view. `users/{uid}/journals/{id}`; `journal_id` on the recording; full CRUD at
+  `/journals`; deleting one unfiles its memories rather than deleting them. **Recall can be scoped to
+  one journal** — by the picker, or by naming it in the question
+  (`pipeline/journal_scope`, a word match, not a second model call) — and the answer says which
+  journal it used so a narrowing is always one tap from being undone
 - [x] Record / Recall action menu (the `+` FAB)
 - [x] Encrypted upload to GCS + CMEK — **verified in real mode** (2026-08-16): `POST /uploads` signs a
   V4 URL via IAM `signBlob` from Cloud Run's keyless credentials, and a direct client `PUT` to the
@@ -112,6 +141,16 @@ Ordered by what unblocks the most. (1) → (2) is the only real dependency; the 
 - [ ] Account-deletion purge across GCS + Firestore + vectors (`account` router exists; real purge stubbed)
 - [ ] Retrieval / prompt tuning
 - [ ] Optional end-to-end encryption tier
+- [ ] ~~Switch accounts on one device~~ — **scoped and deliberately deferred** (2026-08-17). The
+  client work is real (one anonymous Firebase session per account slot, held in named `FirebaseApp`
+  instances, since `signOut` on an anonymous user destroys that identity forever), but it sits on top
+  of an OTP flow that *moves* an account between uids rather than copying it: `merge_user` reattaches
+  everything to the caller and deletes the source. So adding an email that is already a slot on the
+  same phone silently empties the first slot, and restoring on a second device leaves the first
+  authenticating as a uid that no longer exists. Add the leaks the Riverpod cascade does not cover
+  (the audio player's decoded bytes, the `/live` socket's frozen token, `ErrorLog`), and it was not
+  worth the feature. `devices/{install_id}/accounts/{uid}` and the install-id design already support
+  it whenever this is revisited
 
 ---
 
@@ -138,8 +177,14 @@ Ordered by what unblocks the most. (1) → (2) is the only real dependency; the 
 - [x] **Device ↔ account tracking** — install UUID (not a hardware id) sent as a request header and
   throttled to ~one write per user per day. Survives sign-out, so the console can show several
   accounts on one phone once account switching ships
-- [x] **Premium/free tier** — admin-set flag with an audit trail. A label, not an entitlement:
-  nothing in the app enforces a limit yet
+- [x] **Premium/free tier** — admin-set flag with an audit trail, and now a **real entitlement**: a
+  typed memory is capped at **1,000 characters on free, 10,000 on premium** (`core/entitlements.py`,
+  tunable via `VOICEIQ_TEXT_MAX_CHARS_*`). Enforced server-side on `POST /recordings/text` (413) and
+  mirrored in the compose field's counter via `GET /profile`. The tier is read from `userStats`,
+  which no client can write, so it cannot be self-granted. There is still **no purchase flow** —
+  premium is granted by an admin in the console — so the cap shows a plain counter and no upsell.
+  **Journals** are the second entitlement (2 free / 20 premium, `VOICEIQ_JOURNALS_MAX_*`), gated on
+  creation only so a downgrade is never destructive
 - [x] **Marketing site** (`site/`) — static HTML for ad traffic, plus the privacy policy the Play
   listing requires. Legal copy complete: NATIVE MINDS AI LABS, WA, USA, `info@nativemindsai.com`
 - [x] **Firebase Hosting** — two targets (`site`, `admin`) in `firebase.json` + `.firebaserc`;
@@ -155,8 +200,12 @@ Ordered by what unblocks the most. (1) → (2) is the only real dependency; the 
   (**US$100**, a floor because the app is free, so "the amount you paid us" is $0; a literal $0 cap
   can be void as illusory in some jurisdictions and would take the whole clause with it). Both want a
   lawyer's confirmation before the site takes paid traffic
-- [ ] **Decide what premium actually unlocks** — deferred; the toggle exists, is audited, and
-  currently changes nothing for the user
+- [~] **Decide what premium actually unlocks** — two things now: a 10× longer typed memory, and 20
+  journals against the free tier's 2. Journals are the stronger of the pair, because what they buy is
+  **scoped recall** rather than a bigger number. Both are ceilings rather than walls, and both are
+  enforced on *creation only*, so a lapsed subscription never strands anything. The product question
+  left is whether this is enough to charge for; a purchase flow does not exist, so premium remains
+  admin-granted
 
 ---
 
@@ -258,10 +307,10 @@ Ordered by what unblocks the most. (1) → (2) is the only real dependency; the 
 | Phase | Done | Partial (mock) | Not started |
 |-------|:----:|:--------------:|:-----------:|
 | 0 — Foundations | 7 | 0 | 1 |
-| 1 — MVP | 8 | 0 | 1 |
+| 1 — MVP | 11 | 0 | 1 |
 | 2 — Enrichment | 0 | 2 | 2 |
-| 3 — Scale & polish | 0 | 1 | 5 |
-| 3.5 — Operations & launch | 11 | 0 | 2 |
+| 3 — Scale & polish | 0 | 1 | 6 |
+| 3.5 — Operations & launch | 11 | 1 | 1 |
 | 4 — Cost optimization | 0 | 0 | 7 |
 | Cross-cutting | 7 | 0 | 4 |
 

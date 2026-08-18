@@ -28,12 +28,17 @@ String relativeTime(DateTime when) {
   return '${d.inDays ~/ 365}y ago';
 }
 
-/// True while the ingestion pipeline still owes this recording a transcript.
+/// True while the ingestion pipeline still owes this memory its enrichment.
+/// Both kinds of memory pass through the same statuses, so this is source-blind.
 bool isProcessing(String status) => status == 'uploaded' || status == 'transcribing';
 
-/// Human label for a recording's processing status.
-String statusLabel(String status) => switch (status) {
-      'uploaded' || 'transcribing' => 'AI is transcribing…',
+/// Human label for a memory's processing status.
+///
+/// [source] matters only in flight: a typed memory is never transcribed, so
+/// saying so would describe work that is not happening.
+String statusLabel(String status, {String source = 'voice'}) => switch (status) {
+      'uploaded' || 'transcribing' =>
+        source == 'text' ? 'Saving your memory…' : 'AI is transcribing…',
       'indexed' => 'Ready',
       'failed' => 'Processing failed',
       _ => status,

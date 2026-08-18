@@ -46,8 +46,7 @@ class ApiClient {
         queryParameters: q?.map((k, v) => MapEntry(k, '$v')),
       );
 
-  Never _fail(http.Response r) =>
-      throw ApiException(r.statusCode, r.body);
+  Never _fail(http.Response r) => throw ApiException(r.statusCode, r.body);
 
   // -- upload + create ---------------------------------------------------
 
@@ -58,6 +57,7 @@ class ApiClient {
     double durationSec = 0,
     DateTime? eventDate,
     String? title,
+    String? journalId,
   }) async {
     // 1) signed URL
     final up = await _client.post(_u('/uploads'),
@@ -85,19 +85,53 @@ class ApiClient {
       'duration_sec': durationSec,
       if (eventDate != null) 'event_date': _ymd(eventDate),
       if (title != null && title.isNotEmpty) 'title': title,
+      if (journalId != null && journalId.isNotEmpty) 'journal_id': journalId,
     };
-    final rec = await _client.post(_u('/recordings'), headers: await _headers(), body: jsonEncode(body));
+    final rec =
+        await _client.post(_u('/recordings'), headers: await _headers(), body: jsonEncode(body));
     if (rec.statusCode != 201) _fail(rec);
     return Recording.fromJson(jsonDecode(rec.body) as Map<String, dynamic>);
   }
 
+  /// Save a typed memory.
+  ///
+  /// Deliberately not routed through [uploadAndCreate]: its first two steps
+  /// exist only to produce an `audio_path`, and a typed memory has no audio.
+  Future<Recording> createTextMemory({
+    required String text,
+    DateTime? eventDate,
+    String? title,
+    String? journalId,
+  }) async {
+    final body = <String, dynamic>{
+      'text': text,
+      if (eventDate != null) 'event_date': _ymd(eventDate),
+      if (title != null && title.isNotEmpty) 'title': title,
+      if (journalId != null && journalId.isNotEmpty) 'journal_id': journalId,
+    };
+    final r = await _client.post(_u('/recordings/text'),
+        headers: await _headers(), body: jsonEncode(body));
+    if (r.statusCode != 201) _fail(r);
+    return Recording.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
   // -- reads -------------------------------------------------------------
 
-  Future<List<Recording>> listRecordings({DateTime? from, DateTime? to}) async {
+  /// Every recording, or one journal's worth.
+  ///
+  /// [journalId] is three-state, mirroring the server: null filters nothing, an
+  /// empty string selects only *unfiled* memories, and an id selects that
+  /// journal. Collapsing the first two would make the Unfiled view impossible.
+  Future<List<Recording>> listRecordings({
+    DateTime? from,
+    DateTime? to,
+    String? journalId,
+  }) async {
     final r = await _client.get(
       _u('/recordings', {
         if (from != null) 'date_from': _ymd(from),
         if (to != null) 'date_to': _ymd(to),
+        if (journalId != null) 'journal_id': journalId,
       }),
       headers: await _headers(),
     );
@@ -193,6 +227,55 @@ class ApiClient {
     return Recording.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
   }
 
+  /// File a memory into a journal, or unfile it with an empty string.
+  Future<Recording> setRecordingJournal(String recordingId, String journalId) async {
+    final r = await _client.patch(
+      _u('/recordings/$recordingId'),
+      headers: await _headers(),
+      body: jsonEncode({'journal_id': journalId}),
+    );
+    if (r.statusCode != 200) _fail(r);
+    return Recording.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  // -- journals ----------------------------------------------------------
+
+  Future<List<Journal>> listJournals() async {
+    final r = await _client.get(_u('/journals'), headers: await _headers());
+    if (r.statusCode != 200) _fail(r);
+    return (jsonDecode(r.body) as List)
+        .map((e) => Journal.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Create a journal. Throws [ApiException] with a 403 at the tier ceiling and
+  /// a 409 on a duplicate name; the caller turns both into a sentence.
+  Future<Journal> createJournal(String name, {int colorIndex = 0}) async {
+    final r = await _client.post(_u('/journals'),
+        headers: await _headers(), body: jsonEncode({'name': name, 'color_index': colorIndex}));
+    if (r.statusCode != 201) _fail(r);
+    return Journal.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  Future<Journal> updateJournal(String id, {String? name, int? colorIndex}) async {
+    final r = await _client.patch(_u('/journals/$id'),
+        headers: await _headers(),
+        body: jsonEncode({
+          if (name != null) 'name': name,
+          if (colorIndex != null) 'color_index': colorIndex,
+        }));
+    if (r.statusCode != 200) _fail(r);
+    return Journal.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  /// Delete a journal. Its memories are unfiled, never deleted; the returned
+  /// count is how many moved, so the app can say so.
+  Future<int> deleteJournal(String id) async {
+    final r = await _client.delete(_u('/journals/$id'), headers: await _headers());
+    if (r.statusCode != 200) _fail(r);
+    return asInt((jsonDecode(r.body) as Map<String, dynamic>)['unfiled']);
+  }
+
   /// Raw audio bytes for a recording, for in-app playback. Served behind auth by the backend.
   Future<Uint8List> fetchAudioBytes(String recordingId) async {
     final r = await _client.get(_u('/recordings/$recordingId/audio'),
@@ -201,12 +284,19 @@ class ApiClient {
     return r.bodyBytes;
   }
 
-  Future<ChatAnswer> chat(String question, {String? answerLanguage}) async {
+  /// Ask a question. [journalId] is three-state, as on the server: null lets the
+  /// question name its own journal, `''` forces every memory, an id scopes.
+  Future<ChatAnswer> chat(
+    String question, {
+    String? answerLanguage,
+    String? journalId,
+  }) async {
     final r = await _client.post(_u('/chat'),
         headers: await _headers(),
         body: jsonEncode({
           'question': question,
           if (answerLanguage != null) 'answer_language': answerLanguage,
+          if (journalId != null) 'journal_id': journalId,
         }));
     if (r.statusCode != 200) _fail(r);
     return ChatAnswer.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
@@ -243,7 +333,8 @@ class ApiClient {
   }
 
   Future<UserSettings> saveSettings(UserSettings s) async {
-    final r = await _client.put(_u('/settings'), headers: await _headers(), body: jsonEncode(s.toJson()));
+    final r =
+        await _client.put(_u('/settings'), headers: await _headers(), body: jsonEncode(s.toJson()));
     if (r.statusCode != 200) _fail(r);
     return UserSettings.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
   }

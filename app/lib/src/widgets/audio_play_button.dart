@@ -3,6 +3,35 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/audio_playback.dart';
 
+/// The stand-in for [AudioPlayButton] on a typed memory, which has no audio to
+/// play. Same 40×40 circle so a mixed list keeps one alignment grid, and it is
+/// inert on purpose: a disabled play button would still read as "playable but
+/// broken", which is the wrong story.
+class TextMemoryGlyph extends StatelessWidget {
+  const TextMemoryGlyph({super.key, this.onColor, this.backgroundColor});
+
+  final Color? onColor;
+  final Color? backgroundColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final fg = onColor ?? scheme.primary;
+    return Semantics(
+      label: 'Written memory',
+      child: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: backgroundColor ?? scheme.primary.withValues(alpha: 0.12),
+          shape: BoxShape.circle,
+        ),
+        child: Icon(Icons.notes_rounded, color: fg, size: 22),
+      ),
+    );
+  }
+}
+
 /// Play/pause control for a recording. All buttons drive the single shared
 /// player in [audioPlaybackProvider], so only one recording can ever be
 /// playing and each button always plays its own [recordingId]. Shared by the

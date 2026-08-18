@@ -150,7 +150,13 @@ class OtpChallenge(BaseModel):
 
 
 class ProfileView(BaseModel):
-    """What ``GET /profile`` returns."""
+    """What ``GET /profile`` returns.
+
+    Carries the caller's entitlements as well as their identity. The app needs
+    the typed-memory cap before the user starts typing, and folding it in here
+    reuses a call the app already makes on launch rather than adding a second
+    round trip for one integer.
+    """
 
     preferred_name: str = ""
     email: str = ""
@@ -158,16 +164,32 @@ class ProfileView(BaseModel):
     signup_prompt_dismissed: bool = False
     has_profile: bool = False
 
+    # Entitlements. Read-only to the client — tier lives in `userStats`, which no
+    # client can write.
+    tier: UserTier = UserTier.free
+    text_max_chars: int = 0
+    journals_max: int = 0
+
     @classmethod
-    def of(cls, profile: UserProfile | None) -> ProfileView:
+    def of(cls, profile: UserProfile | None, tier: UserTier = UserTier.free) -> ProfileView:
+        # Imported here rather than at module scope: `core.entitlements` reads
+        # settings and imports this module for `UserTier`.
+        from app.core.entitlements import max_journals, max_text_chars
+
+        limits = {
+            "tier": tier,
+            "text_max_chars": max_text_chars(tier),
+            "journals_max": max_journals(tier),
+        }
         if profile is None:
-            return cls()
+            return cls(**limits)
         return cls(
             preferred_name=profile.preferred_name,
             email=profile.email,
             email_verified=profile.email_verified,
             signup_prompt_dismissed=profile.signup_prompt_dismissed,
             has_profile=profile.has_profile,
+            **limits,
         )
 
 

@@ -96,6 +96,39 @@ class RecordingsNotifier extends AsyncNotifier<List<Recording>> {
       rethrow;
     }
   }
+
+  /// File a memory into a journal (or unfile it with an empty id).
+  ///
+  /// Optimistic like the star: the picker closes onto a row that has already
+  /// moved, and only rolls back if the server disagrees.
+  Future<void> setJournal(String recordingId, String journalId) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final index = current.indexWhere((r) => r.id == recordingId);
+    if (index < 0) return;
+
+    final previous = current[index].journalId;
+    final optimistic = [...current]..[index] = current[index].copyWith(journalId: journalId);
+    state = AsyncData(optimistic);
+
+    try {
+      final saved = await ref.read(apiClientProvider).setRecordingJournal(recordingId, journalId);
+      final settled = [...state.valueOrNull ?? optimistic];
+      final at = settled.indexWhere((r) => r.id == recordingId);
+      if (at >= 0) {
+        settled[at] = saved;
+        state = AsyncData(settled);
+      }
+    } catch (e) {
+      final rolledBack = [...state.valueOrNull ?? optimistic];
+      final at = rolledBack.indexWhere((r) => r.id == recordingId);
+      if (at >= 0) {
+        rolledBack[at] = rolledBack[at].copyWith(journalId: previous);
+        state = AsyncData(rolledBack);
+      }
+      rethrow;
+    }
+  }
 }
 
 // Providers are named so a failure reads as "recordings" rather than an opaque
@@ -104,6 +137,65 @@ final recordingsProvider = AsyncNotifierProvider<RecordingsNotifier, List<Record
   RecordingsNotifier.new,
   name: 'recordings',
 );
+
+/// The user's journals, newest state first-class: create/rename/delete update
+/// the list in place rather than refetching, so the sheet closes onto a list
+/// that already shows the change.
+class JournalsNotifier extends AsyncNotifier<List<Journal>> {
+  @override
+  Future<List<Journal>> build() async {
+    // Preserves the existing auth-change cascade.
+    ref.watch(apiClientProvider);
+    return ref.read(apiClientProvider).listJournals();
+  }
+
+  Future<Journal> create(String name) async {
+    final created = await ref.read(apiClientProvider).createJournal(name);
+    // Not optimistic: the server owns the ceiling and the duplicate-name check,
+    // so a journal drawn before the response could have to be taken away again.
+    state = AsyncData(_sorted([...?state.valueOrNull, created]));
+    return created;
+  }
+
+  Future<void> rename(String id, String name) async {
+    final current = state.valueOrNull ?? const [];
+    final saved = await ref.read(apiClientProvider).updateJournal(id, name: name);
+    state = AsyncData(_sorted([
+      for (final j in current)
+        if (j.id == id) saved else j,
+    ]));
+  }
+
+  /// Delete a journal and return how many memories it unfiled.
+  ///
+  /// Invalidates recordings too: every memory that was filed here now reads as
+  /// unfiled, and the lists behind this screen would otherwise keep claiming a
+  /// journal that no longer exists.
+  Future<int> remove(String id) async {
+    final unfiled = await ref.read(apiClientProvider).deleteJournal(id);
+    state = AsyncData([
+      for (final j in state.valueOrNull ?? const <Journal>[])
+        if (j.id != id) j,
+    ]);
+    ref.invalidate(recordingsProvider);
+    return unfiled;
+  }
+
+  static List<Journal> _sorted(List<Journal> items) =>
+      items..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+}
+
+final journalsProvider = AsyncNotifierProvider<JournalsNotifier, List<Journal>>(
+  JournalsNotifier.new,
+  name: 'journals',
+);
+
+/// Which journal Recall is scoped to, as chosen by the picker.
+///
+/// Three-state, matching the API: null means nothing was chosen and the question
+/// may name its own journal; `''` means the user explicitly asked across
+/// everything; an id scopes to it.
+final recallScopeProvider = StateProvider<String?>((ref) => null, name: 'recallScope');
 
 /// The signed-in user's profile. Empty (`hasProfile: false`) until they verify
 /// an email — which is also what makes the app offer signup again after a

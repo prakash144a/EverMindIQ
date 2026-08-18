@@ -46,6 +46,14 @@ class Recording {
   final String mood;
   final bool isMilestone;
 
+  /// How the memory was captured: `voice` or `text`. A typed memory has no audio
+  /// blob, so every playback affordance has to check [hasAudio] first.
+  final String source;
+
+  /// Which journal this memory is filed in; empty means unfiled. Filing is
+  /// manual — nothing assigns this on the user's behalf.
+  final String journalId;
+
   /// True once the user has starred/unstarred by hand; ingestion then leaves it alone.
   final bool isMilestoneManual;
 
@@ -64,8 +72,12 @@ class Recording {
     required this.places,
     required this.mood,
     required this.isMilestone,
+    this.source = 'voice',
+    this.journalId = '',
     this.isMilestoneManual = false,
   });
+
+  bool get hasAudio => source != 'text';
 
   factory Recording.fromJson(Map<String, dynamic> j) => Recording(
         id: asText(j['id']),
@@ -84,11 +96,16 @@ class Recording {
         places: asTextList(j['places']),
         mood: asText(j['mood']),
         isMilestone: j['is_milestone'] as bool? ?? false,
+        // Every recording written before typed memories existed has no `source`,
+        // and all of them were spoken.
+        source: j['source'] == null ? 'voice' : asText(j['source']),
+        journalId: asText(j['journal_id']),
         isMilestoneManual: j['is_milestone_manual'] as bool? ?? false,
       );
 
-  /// Narrow copy for optimistic UI updates (see `RecordingsNotifier.toggleMilestone`).
-  Recording copyWith({bool? isMilestone}) => Recording(
+  /// Narrow copy for optimistic UI updates — the star and the journal, both of
+  /// which are direct-manipulation controls that must move before the round trip.
+  Recording copyWith({bool? isMilestone, String? journalId}) => Recording(
         id: id,
         eventDate: eventDate,
         recordedAt: recordedAt,
@@ -103,10 +120,33 @@ class Recording {
         places: places,
         mood: mood,
         isMilestone: isMilestone ?? this.isMilestone,
+        source: source,
+        journalId: journalId ?? this.journalId,
         isMilestoneManual: isMilestoneManual,
       );
 
   DateTime get eventDateTime => DateTime.parse(eventDate);
+}
+
+/// A named container the user files memories into.
+///
+/// One journal per memory, so this is a folder rather than a label — which is
+/// what lets Recall be scoped to a single one and mean something.
+class Journal {
+  final String id;
+  final String name;
+
+  /// Index into the app's palette rather than a colour: the server has no
+  /// business knowing the theme, and this stays right in dark mode.
+  final int colorIndex;
+
+  const Journal({required this.id, required this.name, this.colorIndex = 0});
+
+  factory Journal.fromJson(Map<String, dynamic> j) => Journal(
+        id: asText(j['id']),
+        name: asText(j['name']),
+        colorIndex: asInt(j['color_index']),
+      );
 }
 
 /// Who the user is, once they've verified an email. Absent until then.
@@ -117,12 +157,27 @@ class UserProfile {
   final bool signupPromptDismissed;
   final bool hasProfile;
 
+  /// `free` or `premium`. Server-owned — it lives in a collection no client can
+  /// write — so this is a display value, never the gate. The gate is the API.
+  final String tier;
+
+  /// Longest typed memory this tier may save. The free default matters: the
+  /// record screen has to be usable before the profile fetch lands.
+  final int textMaxChars;
+
+  /// How many journals this tier may keep. Same reasoning as [textMaxChars]:
+  /// the journals screen must render a sane ceiling before the fetch lands.
+  final int journalsMax;
+
   const UserProfile({
     this.preferredName = '',
     this.email = '',
     this.emailVerified = false,
     this.signupPromptDismissed = false,
     this.hasProfile = false,
+    this.tier = 'free',
+    this.textMaxChars = 1000,
+    this.journalsMax = 2,
   });
 
   factory UserProfile.fromJson(Map<String, dynamic> j) => UserProfile(
@@ -131,7 +186,14 @@ class UserProfile {
         emailVerified: j['email_verified'] as bool? ?? false,
         signupPromptDismissed: j['signup_prompt_dismissed'] as bool? ?? false,
         hasProfile: j['has_profile'] as bool? ?? false,
+        tier: j['tier'] == null ? 'free' : asText(j['tier']),
+        // A zero or missing cap would silently make the field unusable, so fall
+        // back to the free limit rather than trusting the number blindly.
+        textMaxChars: asInt(j['text_max_chars']) > 0 ? asInt(j['text_max_chars']) : 1000,
+        journalsMax: asInt(j['journals_max']) > 0 ? asInt(j['journals_max']) : 2,
       );
+
+  bool get isPremium => tier == 'premium';
 
   /// Two letters for the avatar: first letter of the first and last words
   /// ("Prakash Annadurai" → "PA"), or the first two letters of a single name
@@ -187,19 +249,24 @@ class Citation {
   final String eventDate;
   final String snippet;
   final double score;
+  final String source;
 
   Citation({
     required this.recordingId,
     required this.eventDate,
     required this.snippet,
     required this.score,
+    this.source = 'voice',
   });
+
+  bool get hasAudio => source != 'text';
 
   factory Citation.fromJson(Map<String, dynamic> j) => Citation(
         recordingId: asText(j['recording_id']),
         eventDate: asText(j['event_date']),
         snippet: asText(j['snippet']),
         score: (j['score'] as num?)?.toDouble() ?? 0,
+        source: j['source'] == null ? 'voice' : asText(j['source']),
       );
 }
 
@@ -207,13 +274,28 @@ class ChatAnswer {
   final String answer;
   final List<Citation> citations;
 
-  ChatAnswer({required this.answer, required this.citations});
+  /// Which journal this answer drew on; empty when it drew on everything. The
+  /// scope may have been inferred from the question's wording, so an answer that
+  /// was narrowed has to be able to say so — otherwise it just looks incomplete.
+  final String journalId;
+  final String journalName;
+
+  ChatAnswer({
+    required this.answer,
+    required this.citations,
+    this.journalId = '',
+    this.journalName = '',
+  });
+
+  bool get isScoped => journalId.isNotEmpty;
 
   factory ChatAnswer.fromJson(Map<String, dynamic> j) => ChatAnswer(
         answer: j['answer'] as String? ?? '',
         citations: (j['citations'] as List? ?? const [])
             .map((c) => Citation.fromJson(c as Map<String, dynamic>))
             .toList(),
+        journalId: asText(j['journal_id']),
+        journalName: asText(j['journal_name']),
       );
 }
 

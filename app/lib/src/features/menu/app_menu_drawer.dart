@@ -8,6 +8,7 @@ import '../../widgets/initials_avatar.dart';
 import '../account/profile_screen.dart';
 import '../account/signup_screen.dart';
 import '../feedback/feedback_screen.dart';
+import '../journals/journals_screen.dart';
 import '../onboarding/onboarding_screen.dart';
 import '../settings/settings_screen.dart';
 import 'calendar_page.dart';
@@ -40,9 +41,7 @@ class AppMenuDrawer extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             InkWell(
-              onTap: () => go(profile.hasProfile
-                  ? const ProfileScreen()
-                  : const SignupScreen()),
+              onTap: () => go(profile.hasProfile ? const ProfileScreen() : const SignupScreen()),
               child: Padding(
                 padding: const EdgeInsets.all(Insets.xl),
                 child: Row(
@@ -54,9 +53,7 @@ class AppMenuDrawer extends ConsumerWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            profile.preferredName.isEmpty
-                                ? 'Your memories'
-                                : profile.preferredName,
+                            profile.preferredName.isEmpty ? 'Your memories' : profile.preferredName,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: Theme.of(context).textTheme.titleMedium,
@@ -97,6 +94,11 @@ class AppMenuDrawer extends ConsumerWidget {
                     icon: Icons.star_outline_rounded,
                     label: 'Milestones',
                     onTap: () => go(const MilestonesScreen()),
+                  ),
+                  _MenuTile(
+                    icon: Icons.book_outlined,
+                    label: 'Journals',
+                    onTap: () => go(const JournalsScreen()),
                   ),
                   _MenuTile(
                     icon: Icons.tag_outlined,

@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.core.activity import track_activity
+from app.core.entitlements import tier_for
 from app.core.security import CurrentUser, get_current_user
 from app.models.user import ProfileView, UserProfile, is_email, normalize_email
 from app.services.firestore import get_repository
@@ -47,6 +48,11 @@ class VerifyResponse(BaseModel):
 class ProfilePatch(BaseModel):
     preferred_name: str | None = Field(default=None, max_length=80)
     signup_prompt_dismissed: bool | None = None
+
+
+def _view(repo, uid: str, profile: UserProfile | None) -> ProfileView:
+    """The profile as the app sees it, with the caller's entitlements attached."""
+    return ProfileView.of(profile, tier_for(repo, uid))
 
 
 def _require_email(value: str) -> str:
@@ -107,7 +113,7 @@ def verify_otp(body: OtpVerify, user: CurrentUser = Depends(get_current_user)) -
             _bump_daily_quietly(repo, now, "email_signups")
         return VerifyResponse(
             status="signed_up" if account_uid is None else "verified",
-            profile=ProfileView.of(profile),
+            profile=_view(repo, user.uid, profile),
         )
 
     # --- Restore after a reinstall -----------------------------------------
@@ -139,12 +145,15 @@ def verify_otp(body: OtpVerify, user: CurrentUser = Depends(get_current_user)) -
     _sync_stats_quietly(repo, user.uid, profile)
 
     log.info("restored %s for %s onto the current session", merged, email)
-    return VerifyResponse(status="restored", profile=ProfileView.of(profile), merged=merged)
+    return VerifyResponse(
+        status="restored", profile=_view(repo, user.uid, profile), merged=merged
+    )
 
 
 @profile_router.get("", response_model=ProfileView)
 def get_profile(user: CurrentUser = Depends(get_current_user)) -> ProfileView:
-    return ProfileView.of(get_repository().get_profile(user.uid))
+    repo = get_repository()
+    return _view(repo, user.uid, repo.get_profile(user.uid))
 
 
 @profile_router.patch("", response_model=ProfileView)
@@ -166,7 +175,7 @@ def patch_profile(
     profile.updated_at = datetime.now(timezone.utc)
     repo.save_profile(user.uid, profile)
     _sync_stats_quietly(repo, user.uid, profile)
-    return ProfileView.of(profile)
+    return _view(repo, user.uid, profile)
 
 
 def _sync_stats_quietly(repo, uid: str, profile: UserProfile) -> None:

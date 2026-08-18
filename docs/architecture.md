@@ -5,9 +5,13 @@
 
 ## 1. Overview
 
-VoiceIQ captures life moments as voice recordings, indexes them for semantic search, and lets the
+VoiceIQ captures life moments — spoken or typed — indexes them for semantic search, and lets the
 user converse with an AI that recalls and reasons across those memories. Two hero actions: **Record**
 and **Talk to AI**. Plus **Home** (On This Day slideshow), **Calendar**, and **Insights**.
+
+Voice is the primary path; the capture screen also takes typed text, because the moment a memory is
+worth keeping is often a moment you cannot speak out loud. Both kinds land in one collection and are
+indexed identically.
 
 - **Client:** Flutter (iOS + Android).
 - **Cloud + AI:** Google Cloud + Firebase, using Gemini (native Gemini Live for real-time voice).
@@ -57,12 +61,15 @@ users/{uid}
                                     notificationsEnabled, answerLanguage, retentionDays }
 
 users/{uid}/recordings/{recordingId}
-  eventDate, recordedAt, audioPath, durationSec, status,
+  eventDate, recordedAt, source (voice|text), audioPath, durationSec, status,
+  journalId (empty = unfiled),
   transcript (original language), language, transcriptEn (optional),
   title, summary, tags[], people[], places[], mood, isMilestone, createdAt, updatedAt
 
 users/{uid}/recordings/{recordingId}/chunks/{chunkId}
   text, startSec, endSec, embedding (vector)
+
+users/{uid}/journals/{journalId}   name, colorIndex, createdAt, updatedAt
 
 users/{uid}/insights/{insightId}   range, from, to, summary, themes[], generatedAt
 users/{uid}/memoryFeed/{yyyy-mm-dd} items[]
@@ -70,14 +77,43 @@ users/{uid}/memoryFeed/{yyyy-mm-dd} items[]
 
 Per-user subcollections give natural isolation: security rules require `request.auth.uid == uid`.
 
+`journalId` is denormalized onto the recording rather than the journal holding a list of members:
+filtering is a scan either way, and a list would have to be rewritten on every capture. It means a
+merge must move journals before recordings, or a restored memory would name a container that is no
+longer there. A journal **name** is user-authored content — "Therapy", "Divorce", "Baby" describe a
+life without quoting a word of it — so it falls under the same admin-plane prohibition as
+transcripts (§7).
+
 ## 5. Ingestion & RAG
 
 **Ingestion (async):** upload audio (signed URL) → create doc (`status=uploaded`) → Pub/Sub →
 worker: transcribe (original language) → title/summary/entities → chunk → **embed transcript** (not
 raw audio) → upsert vectors → `status=indexed`.
 
-**RAG:** embed query → vector search (top-k, filtered by `uid` + optional date range) → assemble
-context → Gemini answers with citations back to recordings/dates.
+**Typed memories** (`source=text`) skip the first stage: the text the user wrote *is* the transcript,
+so there is no blob and nothing to transcribe, and ingestion joins at enrichment. Every later stage
+is shared, which is what makes a written memory as recallable as a spoken one. Enrichment also
+reports the detected language, since nothing upstream determined it. Length is the first real
+**entitlement**: `core/entitlements` caps a typed memory by the caller's tier, read from the
+server-only `userStats` document.
+
+**Journals** are named containers the user files memories into, one per memory. Filing is manual:
+chosen on the record screen, changed later from the memory detail view. Nothing files on the user's
+behalf, so the enrichment prompt is untouched. Count is the **entitlement** — free keeps 2, premium
+20 (`core/entitlements`) — and the gate is on *creation only*: an existing journal can always be
+listed, renamed, filed into and deleted, so a lapsed subscription can never strand memories inside
+containers their owner may no longer touch.
+
+**RAG:** embed query → vector search (top-k, filtered by `uid` + optional date range + optional
+journal) → assemble context → Gemini answers with citations back to recordings/dates.
+
+**Scoped recall** is the point of journals: asking about one answers from it alone. Scope is set two
+ways — the picker in Recall, and detection when the question names one of the user's own journals
+(`pipeline/journal_scope`, a word match over those names, deliberately not a second model call). The
+request field is three-state: absent means "infer if you can", `""` means the user explicitly asked
+across everything, an id scopes. The answer echoes the journal it used, because a search narrowed
+without saying so reads as a search that missed things; a scoped miss names the journal rather than
+claiming nothing was ever recorded.
 
 **Cross-lingual:** transcripts stored in original language; a **multilingual** embedding model maps
 meaning across languages, so an English question retrieves Tamil/Hindi/French memories with no

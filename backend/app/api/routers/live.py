@@ -57,6 +57,7 @@ async def live(websocket: WebSocket, token: str | None = Query(default=None)) ->
                 ChatRequest(
                     question=question,
                     answer_language=(msg or {}).get("answer_language"),
+                    journal_id=(msg or {}).get("journal_id"),
                 ),
             )
             await websocket.send_json(resp.model_dump(mode="json"))

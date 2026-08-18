@@ -47,6 +47,42 @@ void main() {
     expect(rec.tags, isEmpty);
   });
 
+  test('a recording stored before typed memories existed reads as spoken', () {
+    // Every such row has no `source`, and all of them were voice.
+    final rec = Recording.fromJson({'id': 'a', 'event_date': '2026-08-16'});
+    expect(rec.source, 'voice');
+    expect(rec.hasAudio, isTrue);
+
+    final typed = Recording.fromJson(
+      {'id': 'b', 'event_date': '2026-08-16', 'source': 'text'},
+    );
+    expect(typed.hasAudio, isFalse);
+  });
+
+  test('a profile without entitlements falls back to the free cap', () {
+    final p = UserProfile.fromJson({'preferred_name': 'Kavya'});
+    expect(p.tier, 'free');
+    expect(p.textMaxChars, 1000);
+    expect(p.isPremium, isFalse);
+
+    // A zero would silently make the compose field unusable.
+    expect(UserProfile.fromJson({'text_max_chars': 0}).textMaxChars, 1000);
+    final premium = UserProfile.fromJson({'tier': 'premium', 'text_max_chars': 10000});
+    expect(premium.isPremium, isTrue);
+    expect(premium.textMaxChars, 10000);
+  });
+
+  test('a citation without a source reads as spoken', () {
+    expect(
+      Citation.fromJson({'recording_id': 'a', 'event_date': '2026-08-16'}).hasAudio,
+      isTrue,
+    );
+    expect(
+      Citation.fromJson({'recording_id': 'a', 'source': 'text'}).hasAudio,
+      isFalse,
+    );
+  });
+
   test('the other LLM-fed models tolerate the same shapes', () {
     final item = MemoryItem.fromJson({
       'recording_id': 'a',

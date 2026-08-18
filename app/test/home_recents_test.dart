@@ -18,6 +18,7 @@ void main() {
     required String status,
     required String title,
     required Duration age,
+    String source = 'voice',
   }) =>
       {
         'id': id,
@@ -25,6 +26,7 @@ void main() {
         'recorded_at': DateTime.now().toUtc().subtract(age).toIso8601String(),
         'status': status,
         'title': title,
+        'source': source,
         'summary': 'The user went to the lake and spent the morning fishing.',
       };
 
@@ -106,6 +108,39 @@ void main() {
     expect(find.text('Processing failed'), findsOneWidget);
     expect(find.text('AI is transcribing…'), findsNothing);
     expect(find.text('3h ago'), findsOneWidget);
+  });
+
+  testWidgets('a written memory offers no playback', (tester) async {
+    await pumpHome(tester, [
+      rec(
+        id: 'w',
+        status: 'indexed',
+        title: 'Typed on the train',
+        age: const Duration(minutes: 5),
+        source: 'text',
+      ),
+    ]);
+
+    expect(find.text('Typed on the train'), findsOneWidget);
+    expect(find.byIcon(Icons.play_arrow), findsNothing,
+        reason: 'a typed memory has no audio, so a play button could only fail');
+    expect(find.byIcon(Icons.notes_rounded), findsOneWidget);
+  });
+
+  testWidgets('a written memory in flight is not described as transcribing', (tester) async {
+    await pumpHome(tester, [
+      rec(
+        id: 'w',
+        status: 'uploaded',
+        title: '',
+        age: const Duration(seconds: 3),
+        source: 'text',
+      ),
+    ]);
+
+    expect(find.text('New written memory'), findsOneWidget);
+    expect(find.text('Saving your memory…'), findsOneWidget);
+    expect(find.text('AI is transcribing…'), findsNothing);
   });
 
   testWidgets('tapping the star marks a recording as a milestone', (tester) async {

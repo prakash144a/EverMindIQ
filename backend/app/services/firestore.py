@@ -25,6 +25,7 @@ from app.models.admin import (
 )
 from app.models.feedback import Feedback
 from app.models.insight import Insight
+from app.models.journal import Journal
 from app.models.memory import MemoryFeed
 from app.models.recording import Chunk, Recording, RecordingStatus
 from app.models.user import (
@@ -58,6 +59,8 @@ class Repository:
         self._recordings: dict[str, dict[str, Recording]] = {}
         # recording_id -> [Chunk]
         self._chunks: dict[str, list[Chunk]] = {}
+        # uid -> {journal_id -> Journal}
+        self._journals: dict[str, dict[str, Journal]] = {}
         # uid -> {insight_id -> Insight}
         self._insights: dict[str, dict[str, Insight]] = {}
         # uid -> {yyyy-mm-dd -> MemoryFeed}
@@ -125,6 +128,37 @@ class Repository:
         with self._lock:
             self._otps.pop(normalize_email(email), None)
 
+    # -- journals ----------------------------------------------------------
+    def list_journals(self, uid: str) -> list[Journal]:
+        with self._lock:
+            items = list(self._journals.get(uid, {}).values())
+        items.sort(key=lambda j: j.name.casefold())
+        return items
+
+    def get_journal(self, uid: str, journal_id: str) -> Journal | None:
+        with self._lock:
+            return self._journals.get(uid, {}).get(journal_id)
+
+    def save_journal(self, uid: str, journal: Journal) -> Journal:
+        with self._lock:
+            self._journals.setdefault(uid, {})[journal.id] = journal
+            return journal
+
+    def delete_journal(self, uid: str, journal_id: str) -> int:
+        """Delete the journal and unfile its memories; return how many moved.
+
+        Deliberately never deletes a memory. Losing a journal is a filing
+        decision; losing what was filed in it would be losing a life.
+        """
+        with self._lock:
+            self._journals.get(uid, {}).pop(journal_id, None)
+            unfiled = 0
+            for rec in self._recordings.get(uid, {}).values():
+                if rec.journal_id == journal_id:
+                    rec.journal_id = ""
+                    unfiled += 1
+            return unfiled
+
     # -- recordings --------------------------------------------------------
     def add_recording(self, rec: Recording) -> Recording:
         with self._lock:
@@ -145,10 +179,15 @@ class Repository:
         uid: str,
         date_from: date | None = None,
         date_to: date | None = None,
+        journal_id: str | None = None,
     ) -> list[Recording]:
         with self._lock:
             items = list(self._recordings.get(uid, {}).values())
-        items = [r for r in items if _in_range(r.event_date, date_from, date_to)]
+        items = [
+            r
+            for r in items
+            if _in_range(r.event_date, date_from, date_to) and _matches_journal(r, journal_id)
+        ]
         items.sort(key=lambda r: (r.event_date, r.recorded_at), reverse=True)
         return items
 
@@ -185,6 +224,7 @@ class Repository:
         top_k: int,
         date_from: date | None = None,
         date_to: date | None = None,
+        journal_id: str | None = None,
     ) -> list[SearchHit]:
         with self._lock:
             recs = dict(self._recordings.get(uid, {}))
@@ -193,6 +233,8 @@ class Repository:
         for rid, chunks in chunks_by_rec.items():
             rec = recs[rid]
             if not _in_range(rec.event_date, date_from, date_to):
+                continue
+            if not _matches_journal(rec, journal_id):
                 continue
             for ch in chunks:
                 hits.append(SearchHit(ch, rec, cosine(query_vec, ch.embedding)))
@@ -505,8 +547,15 @@ class Repository:
         `app/api/routers/auth.py`. Nothing here checks that.
         """
         if src_uid == dst_uid:
-            return {"recordings": 0, "feedback": 0, "insights": 0, "feeds": 0}
+            return {"recordings": 0, "journals": 0, "feedback": 0, "insights": 0, "feeds": 0}
         with self._lock:
+            # Journals move before the recordings that point at them. Ids are
+            # uuids, so nothing can collide, and `journal_id` is denormalized
+            # onto each recording — a restored memory must come back still
+            # filed where its owner filed it.
+            moved_journals = self._journals.pop(src_uid, {})
+            self._journals.setdefault(dst_uid, {}).update(moved_journals)
+
             moved_recs = self._recordings.pop(src_uid, {})
             for rec in moved_recs.values():
                 # uid is denormalized onto the document, so re-bucketing isn't enough.
@@ -541,6 +590,7 @@ class Repository:
         # Chunks are keyed by recording id, which is preserved, so they follow.
         return {
             "recordings": len(moved_recs),
+            "journals": len(moved_journals),
             "feedback": len(moved_feedback),
             "insights": len(moved_insights),
             "feeds": len(moved_feeds),
@@ -552,6 +602,7 @@ class Repository:
             for rid in list(self._recordings.get(uid, {})):
                 self._chunks.pop(rid, None)
             self._recordings.pop(uid, None)
+            self._journals.pop(uid, None)
             self._insights.pop(uid, None)
             self._feeds.pop(uid, None)
             self._feedback.pop(uid, None)
@@ -646,6 +697,17 @@ def _active_since(rows: list[UserStats], cutoff: datetime) -> int:
     return sum(1 for r in rows if r.last_active_at >= cutoff)
 
 
+def _matches_journal(rec: Recording, journal_id: str | None) -> bool:
+    """Whether `rec` passes a journal filter.
+
+    `None` means no filter at all; `""` means *unfiled only*. Collapsing those
+    two into one falsy check would make "show me what I never filed"
+    indistinguishable from "show me everything", which is the whole point of
+    the Unfiled row.
+    """
+    return journal_id is None or rec.journal_id == journal_id
+
+
 def _in_range(d: date, lo: date | None, hi: date | None) -> bool:
     if lo and d < lo:
         return False
@@ -690,6 +752,14 @@ def doc_to_chunks(doc: dict | None) -> list[Chunk]:
     return [Chunk(**c) for c in doc.get("chunks", [])]
 
 
+def journal_to_doc(journal: Journal) -> dict:
+    return journal.model_dump(mode="json")
+
+
+def doc_to_journal(doc: dict) -> Journal:
+    return Journal(**doc)
+
+
 def feedback_to_doc(item: Feedback) -> dict:
     return item.model_dump(mode="json")
 
@@ -704,6 +774,7 @@ class FirestoreRepository:
         users/{uid}                                  settings + profile
         users/{uid}/recordings/{rid}                 Recording
         users/{uid}/recordings/{rid}/chunks/all      every chunk, one document
+        users/{uid}/journals/{journal_id}            Journal
         users/{uid}/insights/{insight_id}
         users/{uid}/feeds/{yyyy-mm-dd}
         users/{uid}/feedback/{feedback_id}
@@ -735,6 +806,9 @@ class FirestoreRepository:
 
     def _recordings(self, uid: str):
         return self._user_doc(uid).collection("recordings")
+
+    def _journals(self, uid: str):
+        return self._user_doc(uid).collection("journals")
 
     def _chunks_doc(self, uid: str, recording_id: str):
         return self._recordings(uid).document(recording_id).collection("chunks").document(
@@ -782,6 +856,33 @@ class FirestoreRepository:
     def delete_otp(self, email: str) -> None:
         self.db.collection("otpChallenges").document(normalize_email(email)).delete()
 
+    # -- journals ----------------------------------------------------------
+    def list_journals(self, uid: str) -> list[Journal]:
+        items = [doc_to_journal(s.to_dict()) for s in self._journals(uid).stream()]
+        # Sorted here rather than in Firestore: a user has at most a couple of
+        # dozen journals, so an index buys nothing and case-insensitive order
+        # is not something Firestore can express anyway.
+        items.sort(key=lambda j: j.name.casefold())
+        return items
+
+    def get_journal(self, uid: str, journal_id: str) -> Journal | None:
+        snap = self._journals(uid).document(journal_id).get()
+        return doc_to_journal(snap.to_dict()) if snap.exists else None
+
+    def save_journal(self, uid: str, journal: Journal) -> Journal:
+        self._journals(uid).document(journal.id).set(journal_to_doc(journal))
+        return journal
+
+    def delete_journal(self, uid: str, journal_id: str) -> int:
+        """See [Repository.delete_journal]. Unfiles, never deletes memories."""
+        self._journals(uid).document(journal_id).delete()
+        unfiled = 0
+        for rec in self.list_recordings(uid, journal_id=journal_id):
+            rec.journal_id = ""
+            self.update_recording(rec)
+            unfiled += 1
+        return unfiled
+
     # -- recordings --------------------------------------------------------
     def add_recording(self, rec: Recording) -> Recording:
         self._recordings(rec.uid).document(rec.id).set(recording_to_doc(rec))
@@ -800,9 +901,14 @@ class FirestoreRepository:
         uid: str,
         date_from: date | None = None,
         date_to: date | None = None,
+        journal_id: str | None = None,
     ) -> list[Recording]:
         items = [doc_to_recording(s.to_dict()) for s in self._recordings(uid).stream()]
-        items = [r for r in items if _in_range(r.event_date, date_from, date_to)]
+        items = [
+            r
+            for r in items
+            if _in_range(r.event_date, date_from, date_to) and _matches_journal(r, journal_id)
+        ]
         # Sorted here rather than in Firestore: the app reads the whole list
         # anyway, so an index buys nothing.
         items.sort(key=lambda r: (r.event_date, r.recorded_at), reverse=True)
@@ -842,13 +948,16 @@ class FirestoreRepository:
         top_k: int,
         date_from: date | None = None,
         date_to: date | None = None,
+        journal_id: str | None = None,
     ) -> list[SearchHit]:
         # Brute-force cosine over the user's own chunks — same semantics as the
         # in-memory implementation, and no vector index to provision. Only
         # recordings belonging to `uid` are ever read, which is the isolation
         # boundary the RAG pipeline depends on.
         hits: list[SearchHit] = []
-        for rec in self.list_recordings(uid, date_from=date_from, date_to=date_to):
+        for rec in self.list_recordings(
+            uid, date_from=date_from, date_to=date_to, journal_id=journal_id
+        ):
             for ch in doc_to_chunks(self._chunks_doc(uid, rec.id).get().to_dict()):
                 hits.append(SearchHit(ch, rec, cosine(query_vec, ch.embedding)))
         hits.sort(key=lambda h: h.score, reverse=True)
@@ -1245,9 +1354,16 @@ class FirestoreRepository:
     def merge_user(self, src_uid: str, dst_uid: str) -> dict[str, int]:
         """See [Repository.merge_user]. Callers must have proven both sides."""
         if src_uid == dst_uid:
-            return {"recordings": 0, "feedback": 0, "insights": 0, "feeds": 0}
+            return {"recordings": 0, "journals": 0, "feedback": 0, "insights": 0, "feeds": 0}
 
-        moved = {"recordings": 0, "feedback": 0, "insights": 0, "feeds": 0}
+        moved = {"recordings": 0, "journals": 0, "feedback": 0, "insights": 0, "feeds": 0}
+        # Journals first: `journal_id` is denormalized onto each recording, so a
+        # restored memory has to find the journal it names still there.
+        for journal in self.list_journals(src_uid):
+            self.save_journal(dst_uid, journal)
+            self._journals(src_uid).document(journal.id).delete()
+            moved["journals"] += 1
+
         for rec in self.list_recordings(src_uid):
             chunks = doc_to_chunks(self._chunks_doc(src_uid, rec.id).get().to_dict())
             rec.uid = dst_uid  # denormalized onto the document
@@ -1298,7 +1414,7 @@ class FirestoreRepository:
         for rec in self.list_recordings(uid):
             self._chunks_doc(uid, rec.id).delete()
             self._recordings(uid).document(rec.id).delete()
-        for name in ("feedback", "insights", "feeds"):
+        for name in ("journals", "feedback", "insights", "feeds"):
             for snap in self._user_doc(uid).collection(name).stream():
                 snap.reference.delete()
         if profile and profile.email:

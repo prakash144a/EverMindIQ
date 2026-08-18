@@ -3,6 +3,10 @@
 Triggered (real mode) by a Pub/Sub message after the client finishes uploading audio. Here it is a
 plain function so the API can also run it inline in mock mode and tests can call it directly.
 
+A **typed** memory (``source == text``) skips the first stage entirely: the text the user wrote is
+already the transcript, so there is no blob to read and nothing to transcribe. Every later stage is
+shared, which is what makes a typed memory as recallable as a spoken one.
+
 Only the **transcript** is embedded (not raw audio) — semantic memory search is a text problem. The
 audio blob stays in GCS for playback/re-transcription.
 """
@@ -14,7 +18,7 @@ import uuid
 from datetime import datetime, timezone
 
 from app.core.config import get_settings
-from app.models.recording import Chunk, Recording, RecordingStatus
+from app.models.recording import Chunk, Recording, RecordingSource, RecordingStatus
 from app.services.embedding import get_embedder
 from app.services.firestore import get_repository
 from app.services.gemini import get_gemini
@@ -65,14 +69,22 @@ def process_recording(uid: str, recording_id: str) -> Recording:
 
     try:
         gemini = get_gemini()
-        audio_bytes = get_storage().read_bytes(rec.audio_path)
-        transcript, language = gemini.transcribe(rec.audio_path, audio_bytes)
+        if rec.source is RecordingSource.text:
+            # A typed memory already carries its own transcript. Nothing to
+            # fetch, nothing to transcribe; the pipeline joins at enrichment.
+            transcript, language = rec.transcript, rec.language
+        else:
+            audio_bytes = get_storage().read_bytes(rec.audio_path)
+            transcript, language = gemini.transcribe(rec.audio_path, audio_bytes)
 
         answer_lang = repo.get_settings_doc(uid).answer_language
         enrich = gemini.enrich(transcript, language, answer_lang)
 
         rec.transcript = transcript
-        rec.language = language
+        # Transcription reports the language it heard; typed text arrives without
+        # one, so enrichment detects it. The spoken path is unchanged — a
+        # detected language always wins over the enricher's echo of it.
+        rec.language = language or enrich.language
         rec.transcript_en = enrich.transcript_en
         rec.title = rec.title or enrich.title
         rec.summary = enrich.summary

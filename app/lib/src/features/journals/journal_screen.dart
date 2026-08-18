@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/tokens.dart';
+import '../../data/models.dart';
 import '../../data/providers.dart';
 import '../../widgets/audio_play_button.dart';
 import '../../widgets/formatting.dart';
@@ -9,35 +10,48 @@ import '../../widgets/milestone_star_button.dart';
 import '../../widgets/states.dart';
 import '../memory/memory_detail_screen.dart';
 
-/// The starred moments of a life, newest first.
-class MilestonesScreen extends ConsumerWidget {
-  const MilestonesScreen({super.key});
+/// Everything filed in one journal — or, in the [JournalScreen.unfiled] form,
+/// everything filed in none.
+///
+/// Filters `recordingsProvider` rather than fetching a scoped list: the app
+/// already holds every recording, so a second request would buy nothing and the
+/// screen follows a reassignment made elsewhere for free.
+class JournalScreen extends ConsumerWidget {
+  const JournalScreen({super.key, required Journal this.journal});
+
+  const JournalScreen.unfiled({super.key}) : journal = null;
+
+  /// Null for the Unfiled view, which is a filter rather than a journal.
+  final Journal? journal;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final recordings = ref.watch(recordingsProvider);
+    final journalId = journal?.id ?? '';
     final scheme = Theme.of(context).colorScheme;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Milestones')),
+      appBar: AppBar(title: Text(journal?.name ?? 'Unfiled')),
       body: recordings.when(
         loading: () => const AppLoadingCard(height: 200),
-        error: (e, _) => AppErrorCard('Could not load milestones: $e'),
+        error: (e, _) => AppErrorCard('Could not load memories: $e'),
         data: (recs) {
-          final milestones = recs.where((r) => r.isMilestone).toList();
-          if (milestones.isEmpty) {
-            return const AppEmptyState(
-              icon: Icons.star_outline_rounded,
-              title: 'No milestones yet',
-              message: 'When a memory marks something big, it shows up here with a ⭐.',
+          final items = recs.where((r) => r.journalId == journalId).toList();
+          if (items.isEmpty) {
+            return AppEmptyState(
+              icon: journal == null ? Icons.inbox_outlined : Icons.book_outlined,
+              title: journal == null ? 'Nothing unfiled' : 'This journal is empty',
+              message: journal == null
+                  ? 'Every memory you have is filed in a journal.'
+                  : 'Open a memory and choose "${journal!.name}" to file it here.',
             );
           }
           return ListView.separated(
             padding: const EdgeInsets.all(Insets.lg),
-            itemCount: milestones.length,
+            itemCount: items.length,
             separatorBuilder: (_, __) => const SizedBox(height: Insets.sm),
             itemBuilder: (_, i) {
-              final r = milestones[i];
+              final r = items[i];
               return Material(
                 key: ValueKey(r.id),
                 color: Theme.of(context).cardColor,
@@ -62,30 +76,23 @@ class MilestonesScreen extends ConsumerWidget {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Row(
-                                children: [
-                                  MilestoneStarButton(r),
-                                  const SizedBox(width: Insets.xs),
-                                  Expanded(
-                                    child: Text(
-                                      r.title.isEmpty ? 'Milestone' : r.title,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(fontWeight: FontWeight.w600),
-                                    ),
-                                  ),
-                                ],
+                              Text(
+                                r.title.isEmpty
+                                    ? (r.hasAudio ? 'New recording' : 'New written memory')
+                                    : r.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontWeight: FontWeight.w600),
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                r.summary.isEmpty ? prettyDate(r.eventDate) : r.summary,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12.5),
+                                prettyDate(r.eventDate),
+                                style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
                               ),
                             ],
                           ),
                         ),
+                        MilestoneStarButton(r),
                       ],
                     ),
                   ),

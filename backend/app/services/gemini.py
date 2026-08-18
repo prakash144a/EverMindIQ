@@ -32,6 +32,9 @@ class Enrichment:
     mood: str = ""
     is_milestone: bool = False
     transcript_en: str = ""
+    # Only meaningful when the caller had no language to give — a typed memory,
+    # which never went through transcription. Spoken memories already know.
+    language: str = ""
 
 
 def _as_text(value: object) -> str:
@@ -64,6 +67,27 @@ def _as_text_list(value: object) -> list[str]:
 _SENTENCE_RE = re.compile(r"(?<=[.!?।])\s+")
 _CAP_RE = re.compile(r"\b([A-Z][a-z]{2,})\b")
 _MILESTONE_HINTS = ("born", "wedding", "married", "graduated", "promotion", "first ", "milestone")
+
+# Enough to tell the scripts our users actually write in apart. Mock mode only —
+# the real path asks the model, which detects language properly rather than
+# guessing from a codepoint range.
+_SCRIPT_RANGES = (
+    ("ta", 0x0B80, 0x0BFF),  # Tamil
+    ("hi", 0x0900, 0x097F),  # Devanagari
+    ("ml", 0x0D00, 0x0D7F),  # Malayalam
+    ("te", 0x0C00, 0x0C7F),  # Telugu
+    ("kn", 0x0C80, 0x0CFF),  # Kannada
+)
+
+
+def _mock_detect_language(text: str) -> str:
+    """A deterministic stand-in for language detection, by script."""
+    for ch in text:
+        code = ord(ch)
+        for tag, low, high in _SCRIPT_RANGES:
+            if low <= code <= high:
+                return tag
+    return "en"
 
 
 class GeminiService:
@@ -116,6 +140,7 @@ class GeminiService:
         summary = first[:200]
         caps = sorted(set(_CAP_RE.findall(text)))
         lowered = text.lower()
+        resolved = language or _mock_detect_language(text)
         return Enrichment(
             title=title,
             summary=summary,
@@ -124,7 +149,8 @@ class GeminiService:
             places=[],
             mood="",
             is_milestone=any(h in lowered for h in _MILESTONE_HINTS),
-            transcript_en=text if language.startswith("en") else "",
+            transcript_en=text if resolved.startswith("en") else "",
+            language=resolved,
         )
 
     @staticmethod
@@ -210,7 +236,10 @@ class GeminiService:
                 "is that person speaking about their own life — it is their memory, not a "
                 "report about a third party.\n\n"
                 "Return JSON with keys title, summary, tags, people, places, mood, "
-                "is_milestone, transcript_en (English translation; empty if already English).\n"
+                "is_milestone, transcript_en (English translation; empty if already English), "
+                "language.\n"
+                "- language: the BCP-47 code of the language the memory is written in (e.g. "
+                "\"en\", \"ta\", \"hi\"). If a language is stated below, echo it back unchanged.\n"
                 "- title: a short, specific, human title for this memory, 3-6 words, from the "
                 "speaker's own perspective (e.g. \"Fishing trip with Dad\", \"The day I moved "
                 "to Chennai\"). No quotes, no trailing punctuation, and never generic filler "
@@ -224,7 +253,7 @@ class GeminiService:
                 "landmark trip. False for ordinary days, routine updates, passing thoughts, "
                 "and merely happy or pleasant moments. When in doubt, false.\n"
                 f"- Write title and summary in this language: {answer_language}.\n\n"
-                f"Transcript ({language}):\n{transcript}"
+                f"Transcript ({language or 'language not known — detect it'}):\n{transcript}"
             ),
             config=types.GenerateContentConfig(response_mime_type="application/json"),
         )
@@ -242,6 +271,7 @@ class GeminiService:
             mood=_as_text(data.get("mood")),
             is_milestone=bool(data.get("is_milestone", False)),
             transcript_en=_as_text(data.get("transcript_en")),
+            language=_as_text(data.get("language")),
         )
 
     def _gemini_answer(self, question, context_blocks, answer_language):  # pragma: no cover

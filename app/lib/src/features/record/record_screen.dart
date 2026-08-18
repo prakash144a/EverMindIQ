@@ -9,12 +9,19 @@ import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
 import '../../core/tokens.dart';
+import '../../data/models.dart';
 import '../../data/providers.dart';
 import '../../widgets/formatting.dart';
+import '../../widgets/journal_picker.dart';
 import '../../widgets/waveform.dart';
 
 /// Immersive full-screen capture. Defaults to now; the date chip back-dates it.
 /// Pops `true` after a successful save so the shell can refresh the feed.
+///
+/// Two ways in, one screen: **Speak** records audio, **Write** takes typed text.
+/// They share the date chip, the phases, and the save contract — only the middle
+/// of the screen differs. Writing exists because the moment a memory is worth
+/// keeping is often a moment you cannot say it out loud.
 class RecordScreen extends ConsumerStatefulWidget {
   const RecordScreen({super.key});
 
@@ -24,10 +31,17 @@ class RecordScreen extends ConsumerStatefulWidget {
 
 enum _Phase { idle, recording, saving }
 
+enum _Mode { voice, text }
+
 class _RecordScreenState extends ConsumerState<RecordScreen> {
   final _recorder = AudioRecorder();
   _Phase _phase = _Phase.idle;
+  _Mode _mode = _Mode.voice;
   DateTime _eventDate = DateTime.now();
+
+  /// Which journal to file this into; empty means unfiled. Filing is manual, so
+  /// the default is deliberately "nowhere" rather than a guess.
+  String _journalId = '';
   DateTime? _startedAt;
   String? _error;
 
@@ -36,11 +50,21 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
   Timer? _ticker;
   Duration _elapsed = Duration.zero;
 
+  final _textCtl = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    // Drives the character counter and the Save button's enabled state.
+    _textCtl.addListener(() => setState(() {}));
+  }
+
   @override
   void dispose() {
     _ampSub?.cancel();
     _ticker?.cancel();
     _recorder.dispose();
+    _textCtl.dispose();
     super.dispose();
   }
 
@@ -48,8 +72,7 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
     setState(() => _error = null);
     try {
       if (!await _recorder.hasPermission()) {
-        setState(() =>
-            _error = 'Microphone permission denied. Allow mic access and try again.');
+        setState(() => _error = 'Microphone permission denied. Allow mic access and try again.');
         return;
       }
       const config = RecordConfig(
@@ -62,9 +85,8 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
       }
       await _recorder.start(config, path: path);
       _amps.clear();
-      _ampSub = _recorder
-          .onAmplitudeChanged(const Duration(milliseconds: 120))
-          .listen(_onAmplitude);
+      _ampSub =
+          _recorder.onAmplitudeChanged(const Duration(milliseconds: 120)).listen(_onAmplitude);
       _startedAt = DateTime.now();
       _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
         if (mounted) setState(() => _elapsed = DateTime.now().difference(_startedAt!));
@@ -96,17 +118,38 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
     }
     setState(() => _phase = _Phase.saving);
     try {
-      final bytes = kIsWeb
-          ? await http.readBytes(Uri.parse(source))
-          : await File(source).readAsBytes();
-      final duration = _startedAt == null
-          ? 0.0
-          : DateTime.now().difference(_startedAt!).inMilliseconds / 1000.0;
+      final bytes =
+          kIsWeb ? await http.readBytes(Uri.parse(source)) : await File(source).readAsBytes();
+      final duration =
+          _startedAt == null ? 0.0 : DateTime.now().difference(_startedAt!).inMilliseconds / 1000.0;
       await ref.read(apiClientProvider).uploadAndCreate(
             audioBytes: bytes,
             contentType: kIsWeb ? 'audio/webm' : 'audio/m4a',
             durationSec: duration,
             eventDate: _isToday(_eventDate) ? null : _eventDate,
+            journalId: _journalId,
+          );
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (e) {
+      setState(() {
+        _phase = _Phase.idle;
+        _error = 'Could not save: $e';
+      });
+    }
+  }
+
+  Future<void> _saveText() async {
+    final text = _textCtl.text.trim();
+    if (text.isEmpty) return;
+    setState(() {
+      _phase = _Phase.saving;
+      _error = null;
+    });
+    try {
+      await ref.read(apiClientProvider).createTextMemory(
+            text: text,
+            eventDate: _isToday(_eventDate) ? null : _eventDate,
+            journalId: _journalId,
           );
       if (mounted) Navigator.of(context).pop(true);
     } catch (e) {
@@ -128,6 +171,11 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
     if (picked != null) setState(() => _eventDate = picked);
   }
 
+  Future<void> _pickJournal() async {
+    final choice = await pickJournal(context, selectedId: _journalId);
+    if (choice != null) setState(() => _journalId = choice.journalId);
+  }
+
   bool _isToday(DateTime d) {
     final n = DateTime.now();
     return d.year == n.year && d.month == n.month && d.day == n.day;
@@ -141,8 +189,9 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final recording = _phase == _Phase.recording;
     return Scaffold(
+      // Keeps the compose field above the keyboard in Write mode.
+      resizeToAvoidBottomInset: true,
       body: Container(
         decoration: const BoxDecoration(
           gradient: RadialGradient(
@@ -158,83 +207,254 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
                 alignment: Alignment.centerLeft,
                 child: IconButton(
                   icon: const Icon(Icons.close, color: Colors.white70),
-                  onPressed: _phase == _Phase.saving
-                      ? null
-                      : () => Navigator.of(context).maybePop(),
+                  onPressed:
+                      _phase == _Phase.saving ? null : () => Navigator.of(context).maybePop(),
                 ),
               ),
-              const Spacer(),
-              _DateChip(
-                label: _isToday(_eventDate) ? 'Today · tap to back-date' : prettyDateTime(_eventDate),
-                onTap: _phase == _Phase.idle ? _pickDate : null,
+              _ModeSwitch(
+                mode: _mode,
+                // Locked mid-capture: switching away from a live recording or a
+                // save in flight would strand it.
+                onChanged: _phase == _Phase.idle
+                    ? (m) => setState(() {
+                          _mode = m;
+                          _error = null;
+                        })
+                    : null,
               ),
-              const SizedBox(height: Insets.sm),
-              _MicButton(
-                phase: _phase,
-                onTap: switch (_phase) {
-                  _Phase.idle => () => _start(),
-                  _Phase.recording => () => _stopAndSave(),
-                  _Phase.saving => null,
-                },
+              Expanded(
+                child: _mode == _Mode.voice ? _buildVoiceBody() : _buildTextBody(),
               ),
-              // The second, deliberate tap needs its own affordance: opening the
-              // screen must never be mistaken for having started the capture.
-              _ActionHint(phase: _phase),
-              const SizedBox(height: Insets.lg),
-              if (recording)
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: Insets.xxl),
-                  child: WaveformView(amplitudes: _amps),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVoiceBody() {
+    final recording = _phase == _Phase.recording;
+    return Column(
+      children: [
+        const Spacer(),
+        _chips(),
+        const SizedBox(height: Insets.sm),
+        _MicButton(
+          phase: _phase,
+          onTap: switch (_phase) {
+            _Phase.idle => () => _start(),
+            _Phase.recording => () => _stopAndSave(),
+            _Phase.saving => null,
+          },
+        ),
+        // The second, deliberate tap needs its own affordance: opening the
+        // screen must never be mistaken for having started the capture.
+        _ActionHint(phase: _phase),
+        const SizedBox(height: Insets.lg),
+        if (recording)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: Insets.xxl),
+            child: WaveformView(amplitudes: _amps),
+          ),
+        const SizedBox(height: Insets.lg),
+        Text(
+          switch (_phase) {
+            _Phase.idle => 'Ready when you are',
+            _Phase.recording => 'Recording… $_elapsedLabel',
+            _Phase.saving => 'Saving & indexing…',
+          },
+          style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: Insets.sm),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: Insets.xxl),
+          child: Text(
+            switch (_phase) {
+              _Phase.idle => 'Nothing is being recorded yet. Tap the mic above to begin, '
+                  'then speak naturally in any language.',
+              _Phase.recording => 'Speak naturally in any language. Tap to stop & save.',
+              _Phase.saving => 'Hang tight while we file this memory away.',
+            },
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.white60, fontSize: 12.5),
+          ),
+        ),
+        if (_error != null) _errorText(),
+        const Spacer(),
+        if (_phase == _Phase.saving)
+          const Padding(
+            padding: EdgeInsets.only(bottom: Insets.xxl),
+            child: SizedBox(
+              width: 26,
+              height: 26,
+              child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white70),
+            ),
+          )
+        else
+          const SizedBox(height: Insets.xxl),
+      ],
+    );
+  }
+
+  Widget _buildTextBody() {
+    // Free until the profile lands, which is the right way round: the server
+    // enforces the real cap, so an optimistic client limit could only ever be
+    // too generous by a moment, never wrongly restrictive.
+    final maxChars = ref.watch(profileProvider).maybeWhen(
+          data: (p) => p.textMaxChars,
+          orElse: () => const UserProfile().textMaxChars,
+        );
+    final saving = _phase == _Phase.saving;
+    final canSave = !saving && _textCtl.text.trim().isNotEmpty;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: Insets.lg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SizedBox(height: Insets.sm),
+          _chips(),
+          const SizedBox(height: Insets.lg),
+          Expanded(
+            child: TextField(
+              controller: _textCtl,
+              enabled: !saving,
+              maxLines: null,
+              expands: true,
+              maxLength: maxChars,
+              textAlignVertical: TextAlignVertical.top,
+              keyboardType: TextInputType.multiline,
+              textCapitalization: TextCapitalization.sentences,
+              style: const TextStyle(color: Colors.white, fontSize: 16, height: 1.45),
+              cursorColor: Colors.white,
+              decoration: InputDecoration(
+                hintText: 'What happened? Write it in any language.',
+                hintStyle: const TextStyle(color: Colors.white38),
+                filled: true,
+                fillColor: Colors.white.withValues(alpha: 0.06),
+                contentPadding: const EdgeInsets.all(Insets.lg),
+                counterStyle: const TextStyle(color: Colors.white54, fontSize: 12),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(Radii.lg),
+                  borderSide: BorderSide.none,
                 ),
-              const SizedBox(height: Insets.lg),
-              Text(
-                switch (_phase) {
-                  _Phase.idle => 'Ready when you are',
-                  _Phase.recording => 'Recording… $_elapsedLabel',
-                  _Phase.saving => 'Saving & indexing…',
-                },
-                style: const TextStyle(
-                    color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
               ),
-              const SizedBox(height: Insets.sm),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: Insets.xxl),
-                child: Text(
-                  switch (_phase) {
-                    _Phase.idle =>
-                      'Nothing is being recorded yet. Tap the mic above to begin, '
-                          'then speak naturally in any language.',
-                    _Phase.recording => 'Speak naturally in any language. Tap to stop & save.',
-                    _Phase.saving => 'Hang tight while we file this memory away.',
-                  },
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white60, fontSize: 12.5),
-                ),
-              ),
-              if (_error != null) ...[
-                const SizedBox(height: Insets.md),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: Insets.xxl),
-                  child: Text(
-                    _error!,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(color: Color(0xFFFF9E9E)),
+            ),
+          ),
+          if (_error != null) _errorText(),
+          const SizedBox(height: Insets.md),
+          FilledButton.icon(
+            onPressed: canSave ? _saveText : null,
+            icon: saving
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white70),
+                  )
+                : const Icon(Icons.check_rounded),
+            label: Text(saving ? 'Saving & indexing…' : 'Save memory'),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.violet,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: Insets.md),
+            ),
+          ),
+          const SizedBox(height: Insets.lg),
+        ],
+      ),
+    );
+  }
+
+  /// Date and journal, side by side. Both are optional decisions the user can
+  /// simply not make — the point of the screen is still to capture fast.
+  Widget _chips() {
+    final idle = _phase == _Phase.idle;
+    final name = journalNameFor(ref, _journalId);
+    return Wrap(
+      alignment: WrapAlignment.center,
+      spacing: Insets.sm,
+      runSpacing: Insets.sm,
+      children: [
+        _PillChip(
+          icon: Icons.event,
+          label: _isToday(_eventDate) ? 'Today · tap to back-date' : prettyDateTime(_eventDate),
+          onTap: idle ? _pickDate : null,
+        ),
+        _PillChip(
+          icon: Icons.book_outlined,
+          label: name ?? 'No journal',
+          onTap: idle ? _pickJournal : null,
+        ),
+      ],
+    );
+  }
+
+  Widget _errorText() => Padding(
+        padding: const EdgeInsets.only(top: Insets.md, left: Insets.md, right: Insets.md),
+        child: Text(
+          _error!,
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: Color(0xFFFF9E9E)),
+        ),
+      );
+}
+
+/// Speak / Write. Disabled (rather than hidden) mid-capture so the screen never
+/// appears to lose a mode.
+class _ModeSwitch extends StatelessWidget {
+  const _ModeSwitch({required this.mode, this.onChanged});
+  final _Mode mode;
+  final ValueChanged<_Mode>? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: Insets.sm),
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(Radii.pill),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _tab(_Mode.voice, Icons.mic, 'Speak'),
+          _tab(_Mode.text, Icons.edit_note, 'Write'),
+        ],
+      ),
+    );
+  }
+
+  Widget _tab(_Mode value, IconData icon, String label) {
+    final selected = mode == value;
+    final enabled = onChanged != null;
+    return Semantics(
+      button: true,
+      selected: selected,
+      child: Material(
+        color: selected ? Colors.white.withValues(alpha: 0.18) : Colors.transparent,
+        borderRadius: BorderRadius.circular(Radii.pill),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(Radii.pill),
+          onTap: enabled ? () => onChanged!(value) : null,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: Insets.lg, vertical: Insets.sm),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon,
+                    size: 16,
+                    color: Colors.white.withValues(alpha: enabled || selected ? 0.9 : 0.4)),
+                const SizedBox(width: 6),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: enabled || selected ? 0.95 : 0.4),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ],
-              const Spacer(),
-              if (_phase == _Phase.saving)
-                const Padding(
-                  padding: EdgeInsets.only(bottom: Insets.xxl),
-                  child: SizedBox(
-                    width: 26,
-                    height: 26,
-                    child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white70),
-                  ),
-                )
-              else
-                const SizedBox(height: Insets.xxl),
-            ],
+            ),
           ),
         ),
       ),
@@ -242,8 +462,11 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
   }
 }
 
-class _DateChip extends StatelessWidget {
-  const _DateChip({required this.label, this.onTap});
+/// A pill on the dark capture ground. Used for both the date and the journal so
+/// the two optional decisions read as the same kind of thing.
+class _PillChip extends StatelessWidget {
+  const _PillChip({required this.icon, required this.label, this.onTap});
+  final IconData icon;
   final String label;
   final VoidCallback? onTap;
 
@@ -260,7 +483,7 @@ class _DateChip extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.event, color: Colors.white70, size: 16),
+              Icon(icon, color: Colors.white70, size: 16),
               const SizedBox(width: Insets.sm),
               Text(label,
                   style: const TextStyle(
@@ -300,8 +523,7 @@ class _ActionHint extends StatelessWidget {
           const SizedBox(width: Insets.sm),
           Text(
             idle ? 'Tap the mic to start recording' : 'Tap to stop & save',
-            style: const TextStyle(
-                color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+            style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
           ),
         ],
       ),

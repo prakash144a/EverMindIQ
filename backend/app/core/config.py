@@ -69,6 +69,20 @@ class Settings(BaseSettings):
     # CORS. "*" is the dev default; production names the console's origin.
     cors_origins: str = "*"
 
+    # Entitlements ----------------------------------------------------------
+    # How long a typed memory may be, by tier. Settings rather than constants so
+    # the cap can be retuned from the Cloud Run env without a code deploy — the
+    # right knob to have while we are still learning what people actually type.
+    text_max_chars_free: int = 1000
+    text_max_chars_premium: int = 10000
+
+    # How many journals a tier may keep. Free is a ceiling rather than a wall so
+    # people learn what journals are for before they hit it; going over the free
+    # limit (by lapsing from premium) never deletes anything, it only blocks
+    # creating more.
+    journals_max_free: int = 2
+    journals_max_premium: int = 20
+
     # Behavior --------------------------------------------------------------
     signed_url_ttl_seconds: int = 900
     rag_top_k: int = 6

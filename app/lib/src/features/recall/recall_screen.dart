@@ -5,8 +5,11 @@ import '../../core/config.dart';
 import '../../core/tokens.dart';
 import '../../data/ai_conversation.dart';
 import '../../data/auth.dart';
+import '../../data/providers.dart';
+import '../../widgets/journal_picker.dart';
 import '../../widgets/ai_orb.dart';
 import '../../widgets/audio_play_button.dart';
+import '../memory/memory_detail_screen.dart';
 import 'voice_mode_screen.dart';
 
 /// Recall — talk to your memories. A back-and-forth thread you can type into,
@@ -29,8 +32,7 @@ class _RecallScreenState extends ConsumerState<RecallScreen> {
   void initState() {
     super.initState();
     final auth = ref.read(firebaseAuthProvider);
-    _ai = AiConversation(() async =>
-        await auth.currentUser?.getIdToken() ?? AppConfig.devUid);
+    _ai = AiConversation(() async => await auth.currentUser?.getIdToken() ?? AppConfig.devUid);
     _ai.addListener(_onUpdate);
     _ai.connect();
   }
@@ -58,8 +60,33 @@ class _RecallScreenState extends ConsumerState<RecallScreen> {
   void _send() {
     final t = _controller.text.trim();
     if (t.isEmpty) return;
-    _ai.send(t);
+    _ai.send(t, journalId: ref.read(recallScopeProvider));
     _controller.clear();
+  }
+
+  Future<void> _pickScope() async {
+    final choice = await pickJournal(
+      context,
+      selectedId: ref.read(recallScopeProvider),
+      title: 'Ask about',
+      unfiledLabel: 'Memories with no journal',
+    );
+    if (choice != null) ref.read(recallScopeProvider.notifier).state = choice.journalId;
+  }
+
+  /// Re-ask the last question across everything.
+  ///
+  /// Sends an explicit empty scope rather than clearing it: the question named a
+  /// journal, so leaving the scope unset would let detection narrow it straight
+  /// back and the action would look broken.
+  void _askEverything() {
+    final lastQuestion = _ai.messages.lastWhere(
+      (m) => m.fromUser,
+      orElse: () => AiMessage('', true),
+    );
+    if (lastQuestion.text.isEmpty) return;
+    ref.read(recallScopeProvider.notifier).state = '';
+    _ai.send(lastQuestion.text, journalId: '');
   }
 
   void _openVoiceMode() {
@@ -67,6 +94,17 @@ class _RecallScreenState extends ConsumerState<RecallScreen> {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const VoiceModeScreen(), fullscreenDialog: true),
     );
+  }
+
+  /// What the scope chip says.
+  ///
+  /// "All memories" is the honest label for the unset state too: nothing is
+  /// filtered until a question happens to name a journal, and the answer says so
+  /// when that happens.
+  String get _scopeLabel {
+    final scope = ref.watch(recallScopeProvider);
+    if (scope == null || scope.isEmpty) return 'All memories';
+    return journalNameFor(ref, scope) ?? 'One journal';
   }
 
   @override
@@ -124,9 +162,13 @@ class _RecallScreenState extends ConsumerState<RecallScreen> {
                         itemCount: messages.length + (_ai.thinking ? 1 : 0),
                         itemBuilder: (_, i) {
                           if (i == messages.length) return const _ThinkingRow();
-                          return _Bubble(messages[i]);
+                          return _Bubble(messages[i], onAskEverything: _askEverything);
                         },
                       ),
+              ),
+              _ScopeChip(
+                label: _scopeLabel,
+                onTap: _pickScope,
               ),
               _InputBar(
                 controller: _controller,
@@ -143,8 +185,12 @@ class _RecallScreenState extends ConsumerState<RecallScreen> {
 }
 
 class _Bubble extends StatelessWidget {
-  const _Bubble(this.msg);
+  const _Bubble(this.msg, {required this.onAskEverything});
   final AiMessage msg;
+
+  /// Offered under a scoped answer so a narrowing the user did not ask for is
+  /// always one tap from being undone.
+  final VoidCallback onAskEverything;
 
   @override
   Widget build(BuildContext context) {
@@ -167,14 +213,91 @@ class _Bubble extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(msg.text,
-                style: const TextStyle(color: Colors.white, height: 1.35, fontSize: 14)),
+            Text(msg.text, style: const TextStyle(color: Colors.white, height: 1.35, fontSize: 14)),
+            if (msg.isScoped) _ScopeFooter(msg.journalName, onAskEverything: onAskEverything),
             if (!isUser)
               for (final c in msg.citations) ...[
                 const SizedBox(height: Insets.sm),
                 _CitationCard(c),
               ],
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Names the journal an answer came from, and offers to widen.
+class _ScopeFooter extends StatelessWidget {
+  const _ScopeFooter(this.journalName, {required this.onAskEverything});
+  final String journalName;
+  final VoidCallback onAskEverything;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: Insets.sm),
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: Insets.sm,
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.book_outlined, size: 13, color: Colors.white54),
+              const SizedBox(width: 5),
+              Text('From your $journalName journal',
+                  style: const TextStyle(color: Colors.white54, fontSize: 11.5)),
+            ],
+          ),
+          InkWell(
+            onTap: onAskEverything,
+            child: const Padding(
+              padding: EdgeInsets.symmetric(vertical: 2),
+              child: Text('Ask all memories',
+                  style: TextStyle(
+                      color: AppColors.violetLight, fontSize: 11.5, fontWeight: FontWeight.w600)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The Recall scope control: which journal the next question goes to.
+class _ScopeChip extends StatelessWidget {
+  const _ScopeChip({required this.label, required this.onTap});
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(Insets.lg, 0, Insets.lg, Insets.xs),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Material(
+          color: Colors.white.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(Radii.pill),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(Radii.pill),
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Insets.md, vertical: 6),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.book_outlined, size: 14, color: Colors.white70),
+                  const SizedBox(width: 6),
+                  Text('Asking: $label',
+                      style: const TextStyle(
+                          color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+                  const Icon(Icons.arrow_drop_down, size: 18, color: Colors.white70),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -230,39 +353,58 @@ class _CitationCard extends StatelessWidget {
     final id = citation['recording_id'] as String?;
     final date = '${citation['event_date'] ?? ''}';
     final snippet = '${citation['snippet'] ?? ''}';
-    return Container(
-      padding: const EdgeInsets.all(Insets.sm),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.06),
+    // Absent on citations written before typed memories existed, and on those
+    // the memory was always spoken.
+    final hasAudio = (citation['source'] ?? 'voice') != 'text';
+    return Material(
+      color: Colors.white.withValues(alpha: 0.06),
+      borderRadius: BorderRadius.circular(Radii.sm),
+      child: InkWell(
         borderRadius: BorderRadius.circular(Radii.sm),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
-      ),
-      child: Row(
-        children: [
-          if (id != null)
-            AudioPlayButton(
-              key: ValueKey(id),
-              recordingId: id,
-              onColor: Colors.white,
-              backgroundColor: Colors.white.withValues(alpha: 0.12),
-            ),
-          if (id != null) const SizedBox(width: Insets.sm),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(date,
-                    style: const TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.w600, fontSize: 12)),
-                if (snippet.isNotEmpty)
-                  Text(snippet,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: Colors.white60, fontSize: 11)),
-              ],
-            ),
+        // The citation says "this memory answered you" — opening it is the
+        // obvious next question, and the snippet is only two lines.
+        onTap: id == null ? null : () => openMemoryDetail(context, id),
+        child: Container(
+          padding: const EdgeInsets.all(Insets.sm),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(Radii.sm),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
           ),
-        ],
+          child: Row(
+            children: [
+              if (id != null && hasAudio)
+                AudioPlayButton(
+                  key: ValueKey(id),
+                  recordingId: id,
+                  onColor: Colors.white,
+                  backgroundColor: Colors.white.withValues(alpha: 0.12),
+                )
+              else if (id != null)
+                TextMemoryGlyph(
+                  onColor: Colors.white,
+                  backgroundColor: Colors.white.withValues(alpha: 0.12),
+                ),
+              if (id != null) const SizedBox(width: Insets.sm),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(date,
+                        style: const TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.w600, fontSize: 12)),
+                    if (snippet.isNotEmpty)
+                      Text(snippet,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: Colors.white60, fontSize: 11)),
+                  ],
+                ),
+              ),
+              if (id != null)
+                Icon(Icons.chevron_right, size: 18, color: Colors.white.withValues(alpha: 0.45)),
+            ],
+          ),
+        ),
       ),
     );
   }
