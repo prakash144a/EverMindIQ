@@ -276,6 +276,26 @@ class ApiClient {
     return asInt((jsonDecode(r.body) as Map<String, dynamic>)['unfiled']);
   }
 
+  /// Erase one memory: its metadata, its transcript, its search index entry and
+  /// its audio object. Nothing is archived anywhere, so this cannot be undone.
+  Future<void> deleteRecording(String id) async {
+    final r = await _client.delete(_u('/recordings/$id'), headers: await _headers());
+    // 404 is treated as success: the memory is gone, which is what was asked
+    // for. Two devices deleting the same one must not leave the second holding
+    // an error about a memory neither of them can see any more.
+    if (r.statusCode != 204 && r.statusCode != 404) _fail(r);
+  }
+
+  /// Erase the whole account server-side: every memory, every audio file, the
+  /// journals, the insights, the settings and the email link.
+  ///
+  /// Does **not** touch the Firebase identity — that is the caller's job, and it
+  /// has to happen after this succeeds, since the token is what authorises it.
+  Future<void> deleteAccount() async {
+    final r = await _client.delete(_u('/account'), headers: await _headers());
+    if (r.statusCode != 204) _fail(r);
+  }
+
   /// Raw audio bytes for a recording, for in-app playback. Served behind auth by the backend.
   Future<Uint8List> fetchAudioBytes(String recordingId) async {
     final r = await _client.get(_u('/recordings/$recordingId/audio'),

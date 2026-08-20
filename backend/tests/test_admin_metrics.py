@@ -134,7 +134,7 @@ def test_a_range_with_no_data_is_empty_not_an_error(client):
 # -- histogram ----------------------------------------------------------
 
 
-def test_durations_land_in_the_right_buckets(client):
+def test_durations_land_in_the_right_buckets(client, lift_recording_limits):
     _record(client, "alice", 5.0)  # 0-15
     _record(client, "alice", 20.0)  # 15-30
     _record(client, "alice", 45.0)  # 30-60
@@ -150,7 +150,7 @@ def test_durations_land_in_the_right_buckets(client):
     assert body["total"] == 4
 
 
-def test_the_histogram_reports_the_true_maximum(client):
+def test_the_histogram_reports_the_true_maximum(client, lift_recording_limits):
     """The buckets are approximate by construction; the maximum is exact, and
     comes from a single ordered read rather than a scan."""
     _record(client, "alice", 5.0)

@@ -169,9 +169,20 @@ class Repository:
         with self._lock:
             return self._recordings.get(uid, {}).get(recording_id)
 
-    def update_recording(self, rec: Recording) -> Recording:
+    def update_recording(self, rec: Recording) -> Recording | None:
+        """Write an existing recording. Returns None when it no longer exists.
+
+        **Never creates.** `add_recording` is the only way a recording comes into
+        being, and keeping the two apart is what stops a slow writer from
+        resurrecting a memory its owner has deleted underneath it — see
+        `pipeline.ingest.process_recording`, which spends seconds in Gemini
+        between reading a recording and writing it back.
+        """
         with self._lock:
-            self._recordings.setdefault(rec.uid, {})[rec.id] = rec
+            owned = self._recordings.get(rec.uid)
+            if owned is None or rec.id not in owned:
+                return None
+            owned[rec.id] = rec
             return rec
 
     def list_recordings(
@@ -217,6 +228,19 @@ class Repository:
         with self._lock:
             self._chunks[recording_id] = chunks
 
+    def discard_chunks(self, uid: str, recording_id: str) -> None:
+        """Throw away a recording's chunks on their own.
+
+        `delete_recording` already does this as part of removing the memory. This
+        is for the other case: an ingestion run that wrote chunks and *then*
+        discovered the recording had been deleted under it. The chunks hold the
+        transcript, so leaving them is leaving behind the very thing the delete
+        promised to remove.
+        """
+        del uid
+        with self._lock:
+            self._chunks.pop(recording_id, None)
+
     def vector_search(
         self,
         uid: str,
@@ -260,6 +284,21 @@ class Repository:
     def get_feed(self, uid: str, for_date: date) -> MemoryFeed | None:
         with self._lock:
             return self._feeds.get(uid, {}).get(for_date.isoformat())
+
+    def purge_derived(self, uid: str) -> None:
+        """Drop everything generated *from* the user's memories: feeds, insights.
+
+        Both copy content out of the recordings they were built from — a feed
+        item carries a title and a summary, an insight is a narrative over a
+        range — so deleting a recording without this leaves its words readable in
+        a cache. Whole-cache rather than surgical: finding every affected date
+        and range costs more than regenerating two things that are rebuilt on
+        demand anyway, and a missed one would be a memory the user believes is
+        gone still being shown back to them.
+        """
+        with self._lock:
+            self._feeds.pop(uid, None)
+            self._insights.pop(uid, None)
 
     # ==================================================================
     # Admin plane
@@ -327,10 +366,12 @@ class Repository:
         device.account_count = len(accounts)
         self._devices[install_id] = device
 
-    def record_created(self, uid: str, duration_sec: float, recorded_at: datetime) -> UserStats:
+    def record_created(
+        self, uid: str, duration_sec: float, recorded_at: datetime, *, is_voice: bool = True
+    ) -> UserStats:
         with self._lock:
             stats, _ = self.ensure_user_stats(uid)
-            stats_ops.apply_recording_created(stats, duration_sec, recorded_at)
+            stats_ops.apply_recording_created(stats, duration_sec, recorded_at, is_voice=is_voice)
             self._stats[uid] = stats
             return stats
 
@@ -892,8 +933,24 @@ class FirestoreRepository:
         snap = self._recordings(uid).document(recording_id).get()
         return doc_to_recording(snap.to_dict()) if snap.exists else None
 
-    def update_recording(self, rec: Recording) -> Recording:
-        self._recordings(rec.uid).document(rec.id).set(recording_to_doc(rec))
+    def update_recording(self, rec: Recording) -> Recording | None:  # pragma: no cover
+        """See `Repository.update_recording`. Returns None if the doc is gone.
+
+        `update` rather than `set`, and that is the whole point: `set` creates
+        what is missing, so it silently un-deletes a recording that was removed
+        while a slow ingestion run held a copy of it. `update` is one atomic
+        operation that fails when the document is absent — a `get` followed by a
+        `set` would only shrink the same race, not close it.
+
+        The doc is written whole, so this overwrites exactly as `set` did for the
+        case that matters: the recording still being there.
+        """
+        from google.api_core.exceptions import NotFound
+
+        try:
+            self._recordings(rec.uid).document(rec.id).update(recording_to_doc(rec))
+        except NotFound:
+            return None
         return rec
 
     def list_recordings(
@@ -941,6 +998,10 @@ class FirestoreRepository:
     def save_chunks(self, uid: str, recording_id: str, chunks: list[Chunk]) -> None:
         self._chunks_doc(uid, recording_id).set(chunks_to_doc(chunks))
 
+    def discard_chunks(self, uid: str, recording_id: str) -> None:  # pragma: no cover
+        """See `Repository.discard_chunks`. Same delete `delete_recording` does."""
+        self._chunks_doc(uid, recording_id).delete()
+
     def vector_search(
         self,
         uid: str,
@@ -984,6 +1045,14 @@ class FirestoreRepository:
     def get_feed(self, uid: str, for_date: date) -> MemoryFeed | None:
         snap = self._user_doc(uid).collection("feeds").document(for_date.isoformat()).get()
         return MemoryFeed(**snap.to_dict()) if snap.exists else None
+
+    def purge_derived(self, uid: str) -> None:  # pragma: no cover - real path
+        """See `Repository.purge_derived`. Both collections are small — one
+        document per day looked at, one per insight range — so a full sweep is
+        cheaper than working out which ones mentioned the deleted memory."""
+        for name in ("feeds", "insights"):
+            for snap in self._user_doc(uid).collection(name).stream():
+                snap.reference.delete()
 
     # ==================================================================
     # Admin plane — top-level collections, outside `users/`.
@@ -1063,10 +1132,10 @@ class FirestoreRepository:
         doc.set(device.model_dump(mode="json"))
 
     def record_created(  # pragma: no cover - real path
-        self, uid: str, duration_sec: float, recorded_at: datetime
+        self, uid: str, duration_sec: float, recorded_at: datetime, *, is_voice: bool = True
     ) -> UserStats:
         stats, _ = self.ensure_user_stats(uid)
-        stats_ops.apply_recording_created(stats, duration_sec, recorded_at)
+        stats_ops.apply_recording_created(stats, duration_sec, recorded_at, is_voice=is_voice)
         return self.save_user_stats(stats)
 
     def record_deleted(  # pragma: no cover - real path

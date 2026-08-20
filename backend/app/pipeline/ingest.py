@@ -32,8 +32,31 @@ class RecordingNotFound(LookupError):
 
     Permanent, not transient — retrying can never help, so the Pub/Sub push
     handler acks instead of nacking. Happens when a recording is deleted before
-    ingestion runs, or when a message outlives the data it referenced.
+    ingestion runs, when it is deleted **while** a run is working (see
+    `_write_or_gone`), or when a message outlives the data it referenced.
     """
+
+
+def _write_or_gone(repo, rec: Recording) -> None:
+    """Persist progress, or declare the recording deleted and leave nothing behind.
+
+    This is the whole defence against a delete losing to a slow ingestion run.
+    A run spends seconds inside Gemini, and the user can delete the memory in
+    that window; `update_recording` refuses to create, so a None here means
+    exactly that happened. The delete wins — it is what the user asked for and
+    the app promised it was final — so this run discards the chunks it may have
+    written and gives up.
+
+    Raising `RecordingNotFound` is what makes the give-up correct at every layer:
+    Pub/Sub delivery is at-least-once, so this same message can arrive again days
+    later, and the push handler acks that exception rather than retrying forever.
+    """
+    if repo.update_recording(rec) is not None:
+        return
+    repo.discard_chunks(rec.uid, rec.id)
+    raise RecordingNotFound(
+        f"recording {rec.id} for user {rec.uid} was deleted while ingestion ran"
+    )
 
 
 def chunk_transcript(transcript: str, max_words: int = 60) -> list[str]:
@@ -65,7 +88,11 @@ def process_recording(uid: str, recording_id: str) -> Recording:
 
     rec.status = RecordingStatus.transcribing
     rec.updated_at = datetime.now(timezone.utc)
-    repo.update_recording(rec)
+    # Guarded like the two below, not because much can happen in the microseconds
+    # since the read, but because the read/write pair above is exactly the shape
+    # that let the bug in: any write here that could create is a way back for a
+    # deleted memory.
+    _write_or_gone(repo, rec)
 
     try:
         gemini = get_gemini()
@@ -113,10 +140,14 @@ def process_recording(uid: str, recording_id: str) -> Recording:
     except Exception:
         rec.status = RecordingStatus.failed
         rec.updated_at = datetime.now(timezone.utc)
-        repo.update_recording(rec)
+        # If the recording is gone, `_write_or_gone` raises `RecordingNotFound`
+        # in place of the original error — deliberately. There is no failure left
+        # to record on a memory that no longer exists, and the substitution is
+        # what gets the message acked instead of retried against nothing.
+        _write_or_gone(repo, rec)
         raise
 
     rec.updated_at = datetime.now(timezone.utc)
-    repo.update_recording(rec)
+    _write_or_gone(repo, rec)
     _ = settings  # settings available for future real-mode Pub/Sub ack, etc.
     return rec

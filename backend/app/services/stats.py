@@ -9,14 +9,46 @@ the failure mode that would make the admin console quietly lie.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
-from app.models.recording import Recording
+from app.models.recording import Recording, RecordingSource
 from app.models.user import MAX_TRAIL, UserStats, UserTier
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def month_key(at: datetime | None = None) -> str:
+    """The calendar month a usage counter belongs to, as "YYYY-MM", in UTC.
+
+    UTC rather than the user's local month, because the server has no reliable
+    idea what the user's timezone is and a quota that rolls over at a different
+    instant per request is a quota nobody can reason about.
+    """
+    return (at or _utcnow()).strftime("%Y-%m")
+
+
+def voice_recordings_in_month(stats: UserStats, at: datetime | None = None) -> int:
+    """How many voice memories this account has made in the month containing `at`.
+
+    A stored counter from an earlier month reads as zero rather than being reset
+    here: this is the read path, and rewriting the document on a read would turn
+    every profile fetch into a write.
+    """
+    if stats.usage_month != month_key(at):
+        return 0
+    return stats.voice_recordings_this_month
+
+
+def month_resets_on(at: datetime | None = None) -> date:
+    """The first day of the month after the one containing `at`.
+
+    What the app shows as "resets on"; computed here so the API and any future
+    caller agree on the date rather than each doing its own month arithmetic.
+    """
+    day = (at or _utcnow()).date()
+    return date(day.year + 1, 1, 1) if day.month == 12 else date(day.year, day.month + 1, 1)
 
 
 def new_stats(uid: str, now: datetime | None = None) -> UserStats:
@@ -58,10 +90,19 @@ def apply_activity(
 
 
 def apply_recording_created(
-    stats: UserStats, duration_sec: float, recorded_at: datetime | None = None
+    stats: UserStats,
+    duration_sec: float,
+    recorded_at: datetime | None = None,
+    *,
+    is_voice: bool = True,
 ) -> UserStats:
     at = recorded_at or _utcnow()
     stats.recordings_count += 1
+    if is_voice:
+        # Metered against the month this ran in, never against `recorded_at`: a
+        # back-dated memory is created now and costs now, so letting the event
+        # date pick the bucket would hand out a fresh quota per past month.
+        _bump_voice_month(stats)
     stats.total_duration_sec = round(stats.total_duration_sec + duration_sec, 3)
     stats.max_duration_sec = max(stats.max_duration_sec, duration_sec)
     if stats.first_recorded_at is None or at < stats.first_recorded_at:
@@ -71,8 +112,22 @@ def apply_recording_created(
     return stats
 
 
+def _bump_voice_month(stats: UserStats, at: datetime | None = None) -> None:
+    """Count one voice memory against the current month, rolling over if needed."""
+    key = month_key(at)
+    if stats.usage_month != key:
+        stats.usage_month = key
+        stats.voice_recordings_this_month = 0
+    stats.voice_recordings_this_month += 1
+
+
 def apply_recording_deleted(stats: UserStats, duration_sec: float) -> UserStats:
     """Reverse a create — except for the maximum, which is a high-water mark.
+
+    The monthly voice meter is deliberately *not* reversed either. It measures
+    what the account has spent this month, and the transcription was already paid
+    for by the time anyone can delete the memory — refunding the slot would make
+    the quota bypassable by recording, keeping the transcript, and deleting.
 
     A max cannot be decremented without rescanning every remaining recording,
     which is exactly the per-delete O(N) cost this design exists to avoid. So
@@ -111,6 +166,19 @@ def apply_tier(
     return stats
 
 
+def _merge_voice_month(src: UserStats, dst: UserStats) -> None:
+    """Fold one account's monthly meter into another's, matching `merge_stats`.
+
+    Only the current month's counters add up; a stale one on either side reads as
+    zero. Restoring an account must not hand back a quota, and must not charge
+    the caller for a month they have already left behind.
+    """
+    key = month_key()
+    used = voice_recordings_in_month(src, None) + voice_recordings_in_month(dst, None)
+    dst.usage_month = key
+    dst.voice_recordings_this_month = used
+
+
 def merge_stats(src: UserStats, dst: UserStats) -> UserStats:
     """Fold `src` into `dst`, matching `Repository.merge_user`'s direction.
 
@@ -129,6 +197,7 @@ def merge_stats(src: UserStats, dst: UserStats) -> UserStats:
     permanently, which is why it is spelled out here rather than inlined.
     """
     dst.recordings_count += src.recordings_count
+    _merge_voice_month(src, dst)
     dst.total_duration_sec = round(dst.total_duration_sec + src.total_duration_sec, 3)
     dst.max_duration_sec = max(dst.max_duration_sec, src.max_duration_sec)
     dst.feedback_count += src.feedback_count
@@ -181,6 +250,15 @@ def recompute(stats: UserStats, recordings: list[Recording], feedback_count: int
     the way to correct a high-water mark left behind by deletions.
     """
     stats.recordings_count = len(recordings)
+    # Rebuilt from `created_at`, the same clock the incremental path meters
+    # against — see `apply_recording_created`.
+    key = month_key()
+    stats.usage_month = key
+    stats.voice_recordings_this_month = sum(
+        1
+        for r in recordings
+        if r.source is not RecordingSource.text and month_key(r.created_at) == key
+    )
     stats.total_duration_sec = round(sum(r.duration_sec for r in recordings), 3)
     stats.max_duration_sec = max((r.duration_sec for r in recordings), default=0.0)
     stats.feedback_count = feedback_count

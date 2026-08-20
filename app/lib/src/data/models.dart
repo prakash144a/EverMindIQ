@@ -169,6 +169,20 @@ class UserProfile {
   /// the journals screen must render a sane ceiling before the fetch lands.
   final int journalsMax;
 
+  /// Voice memories this tier may make per calendar month, and how many are
+  /// already gone. The pair exists so the record screen can refuse *before* the
+  /// microphone opens: discovering the quota from a 429 after the upload means
+  /// the user spoke for nothing.
+  final int recordingsPerMonth;
+  final int recordingsUsedThisMonth;
+
+  /// When the count above goes back to zero. Null until the profile lands.
+  final DateTime? recordingsMonthResetsOn;
+
+  /// Seconds. The recorder stops itself here, and voice mode counts this down.
+  final int recordingMaxSec;
+  final int voiceSessionMaxSec;
+
   const UserProfile({
     this.preferredName = '',
     this.email = '',
@@ -178,6 +192,11 @@ class UserProfile {
     this.tier = 'free',
     this.textMaxChars = 1000,
     this.journalsMax = 2,
+    this.recordingsPerMonth = 10,
+    this.recordingsUsedThisMonth = 0,
+    this.recordingsMonthResetsOn,
+    this.recordingMaxSec = 60,
+    this.voiceSessionMaxSec = 600,
   });
 
   factory UserProfile.fromJson(Map<String, dynamic> j) => UserProfile(
@@ -191,9 +210,27 @@ class UserProfile {
         // back to the free limit rather than trusting the number blindly.
         textMaxChars: asInt(j['text_max_chars']) > 0 ? asInt(j['text_max_chars']) : 1000,
         journalsMax: asInt(j['journals_max']) > 0 ? asInt(j['journals_max']) : 2,
+        recordingsPerMonth:
+            asInt(j['recordings_per_month']) > 0 ? asInt(j['recordings_per_month']) : 10,
+        // Not defaulted away from zero: zero used is the honest starting value,
+        // and the three caps around it are the ones a missing number would break.
+        recordingsUsedThisMonth: asInt(j['recordings_used_this_month']),
+        // A plain "YYYY-MM-DD", so no timezone shift to worry about.
+        recordingsMonthResetsOn:
+            DateTime.tryParse(asText(j['recordings_month_resets_on'])),
+        recordingMaxSec: asInt(j['recording_max_sec']) > 0 ? asInt(j['recording_max_sec']) : 60,
+        voiceSessionMaxSec:
+            asInt(j['voice_session_max_sec']) > 0 ? asInt(j['voice_session_max_sec']) : 600,
       );
 
   bool get isPremium => tier == 'premium';
+
+  /// Voice memories left this month, floored at zero — a lapsed premium account
+  /// can legitimately be over the free ceiling.
+  int get recordingsLeftThisMonth =>
+      (recordingsPerMonth - recordingsUsedThisMonth).clamp(0, recordingsPerMonth);
+
+  bool get canRecord => recordingsLeftThisMonth > 0;
 
   /// Two letters for the avatar: first letter of the first and last words
   /// ("Prakash Annadurai" → "PA"), or the first two letters of a single name

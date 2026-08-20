@@ -107,6 +107,32 @@ containers their owner may no longer touch.
 **RAG:** embed query → vector search (top-k, filtered by `uid` + optional date range + optional
 journal) → assemble context → Gemini answers with citations back to recordings/dates.
 
+**Voice entitlements** are the three that meter the parts that cost money per minute, all in
+`core/entitlements` and all read from the same server-only `userStats` document:
+
+| Limit | Free | Premium | Enforced at |
+| --- | --- | --- | --- |
+| Voice memories per calendar month | 10 | 100 | `POST /recordings` → 429 |
+| One recording | 60 s | 600 s | `POST /recordings` → 413 |
+| One spoken recall conversation | 600 s | 3600 s | `services/live` hangs up the session |
+
+Typed memories are metered by *neither* count nor length-in-time — writing costs nothing to
+transcribe, so the only lever on it is `text_max_chars`. The monthly counter lives on `userStats` as
+`usage_month` + `voice_recordings_this_month`: one counter stamped with the month it belongs to, so
+roll-over is a comparison rather than a cleanup job, and a stale stamp reads as zero. It is
+deliberately **not** decremented on delete — the transcription was already paid for, and refunding
+the slot would make the quota bypassable by recording, keeping the transcript, and deleting.
+
+Every one of these is *also* published on `GET /profile`, because the app has to refuse before it
+opens the microphone: a 429 that arrives after the upload means the user spoke for nothing. The
+server checks remain the backstop, never the primary gate.
+
+The conversation limit is per call, not per month, and it is enforced inside the session object
+rather than the router: what it protects is an open Gemini Live socket, which bills for as long as it
+is held, whatever the client does. It announces itself in the `ready` frame (`limit_sec`) and ends
+with its own `limit_reached` frame rather than an `error` — running out of time you were told you had
+is the plan working.
+
 **Scoped recall** is the point of journals: asking about one answers from it alone. Scope is set two
 ways — the picker in Recall, and detection when the question names one of the user's own journals
 (`pipeline/journal_scope`, a word match over those names, deliberately not a second model call). The
@@ -122,14 +148,55 @@ query-time translation. Answers follow the question's language or `settings.answ
 **Insights:** fetch range → map-reduce summarize → extract themes → cache. Long ranges precomputed
 nightly. **On This Day:** nightly job writes `memoryFeed/{today}` from anniversaries + milestones.
 
-**Live voice:** app opens WSS to `/live`; backend bridges to Gemini Live and injects retrieved memory
-context per turn. Keys never leave the server.
+**Live voice:** the app opens WSS to `/live`, sends `{"type":"audio_start"}`, then streams raw
+microphone PCM (16 kHz mono, PCM16) as binary frames; Gemini's own voice comes back as binary PCM
+(24 kHz mono) plus JSON control frames — `input_transcript`, `output_transcript`, `citations`,
+`interrupted`, `turn_complete`. Binary is audio and JSON is control, both directions. Nothing on the
+device recognizes or synthesizes speech, which is what makes voice work in the language the memories
+are actually in. Memories reach the model as a **tool** (`recall_memories`) rather than as context
+stuffed in up front, because a spoken conversation has no single question to retrieve for; the tool
+runs the same `pipeline.rag.retrieve` the text Recall screen uses, and whatever it returns is also
+sent to the client as citations. The same socket still carries the text protocol, so ending a call
+does not end the chat. Keys never leave the server.
 
 ## 6. Security
 
 TLS everywhere; Firebase ID token verified per request; App Check. Audio in GCS with CMEK, no public
 objects, uploads via short-lived signed URLs. Firestore rules scope every doc to its owner. Gemini
-calls are server-side only; keys in Secret Manager. Account deletion purges GCS + Firestore + vectors.
+calls are server-side only; keys in Secret Manager.
+
+**Deletion** is total in both sizes, and the app says so in those words, so the implementation has to
+earn the sentence. Deleting one memory removes its document, its chunks (which *are* the search
+index), its audio object, and the **derived caches** — `feeds` and `insights`. That last one is not
+obvious and is the reason `Repository.purge_derived` exists: a feed item copies the title and summary
+out of the recording it was built from and is served from storage rather than recomputed, so without
+the purge a deleted memory goes on being shown to the person who deleted it. The caches are dropped
+wholesale rather than edited, because both are rebuilt on demand and a missed entry is exactly the
+failure the feature exists to prevent. Deleting an account does all of that plus journals, feedback,
+settings, `userStats`, the device links and the email index, and sweeps storage **by prefix** so
+blobs whose recording was never registered go too. Nothing is archived on the way out; there is no
+recovery path to offer, and the app does not pretend otherwise.
+
+**A delete must beat a slow writer.** Ingestion is a read-modify-write with *seconds* in the middle
+(a Pub/Sub hop, then Gemini), and a delete landing in that window used to be silently undone: the
+worker's final write re-created the document, transcript, summary and search index included. Found
+on production on 2026-08-19, invisible offline because mock mode runs ingestion **inline** inside the
+create request, so there is no window to lose.
+
+The invariant that fixes it, and that new code must not break: **`update_recording` never creates.**
+`add_recording` is the only way a recording comes into being. Firestore uses `update` rather than
+`set` — one atomic operation that fails when the document is absent, where a `get`-then-`set` guard
+would only shrink the race. A `None` return means the memory was deleted underneath the caller, and
+`pipeline.ingest._write_or_gone` turns that into `RecordingNotFound`, discarding any chunks the run
+had already written (they hold the transcript, so leaving them leaves the thing the delete promised
+to remove). `PATCH /recordings/{id}` is the same shape on a shorter fuse and answers 404.
+
+Raising `RecordingNotFound` is also what makes at-least-once delivery safe. The ingest subscription
+has a retry policy and no dead-letter queue, so the same message can arrive days later; the push
+handler acks that exception instead of retrying against nothing. This is why gating the *client's*
+delete button on `status == indexed` would not have worked — a redelivery arrives long after the
+memory is indexed, a run exceeding the 120s ack deadline gets redelivered while still running, and
+memories stuck in `failed`/`transcribing` would have become permanently undeletable.
 
 ## 7. Admin plane
 
@@ -184,7 +251,7 @@ email is the durable identifier and `previous_uids` preserves the lineage.
 ## 8. Phased delivery
 
 - **Phase 0** — foundations: GCP/Firebase, Terraform, app shell, CI.
-- **Phase 1 (MVP)** — record + back-date, encrypted upload, ingestion, calendar, Talk-to-AI (text→voice), auth.
+- **Phase 1 (MVP)** — record + back-date, encrypted upload, ingestion, calendar, Talk-to-AI (text and live voice), auth.
 - **Phase 2** — On This Day, insights drawer, push, entity extraction/search.
 - **Phase 3** — Vertex Vector Search migration, milestones, export, tuning, optional E2E tier.
 - **Phase 3.5** — operations & launch surface: admin console, marketing site, product rename,

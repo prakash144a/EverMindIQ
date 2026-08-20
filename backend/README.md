@@ -15,9 +15,35 @@ FastAPI service: REST API + ingestion pipeline + RAG + Gemini Live proxy.
 python -m venv .venv
 source .venv/bin/activate            # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
-cp .env.example .env                 # defaults are fine for mock mode
 uvicorn app.main:app --reload        # http://localhost:8000/docs
 ```
+
+No copying step: `config/local.env` is committed and is the default profile, so a
+fresh clone runs offline in mock mode with no credentials.
+
+## Configuration
+
+Two profiles in `config/`, selected by `VOICEIQ_ENV` (unset means `local`):
+
+| File | Committed? | Used for |
+|---|---|---|
+| `config/local.env` | yes | local dev, the Android emulator, the test suite. No secrets. |
+| `config/production.env` | **no** — gitignored | real GCP, real Gemini, the Azure credential |
+| `config/production.env.example` | yes | template for the above; recreate it in a fresh clone |
+
+`local.env` always loads first and the profile layers on top, so `production.env`
+only states what differs. Run against real cloud with:
+
+```bash
+VOICEIQ_ENV=production uvicorn app.main:app --reload
+```
+
+Neither file reaches Cloud Run — the Dockerfile copies only `pyproject.toml` and
+`app/`. Production is configured by the env vars Terraform sets on the service,
+and Terraform reads the `VOICEIQ_MODEL_*` lines out of `config/production.env`,
+so the model written there is the model production runs after `terraform apply`.
+Never use a `-latest` model alias: Vertex publishes none, and the call fails
+outright. `tests/test_model_config_consistency.py` enforces all of this.
 
 ## Test
 

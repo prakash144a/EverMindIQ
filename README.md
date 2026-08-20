@@ -26,6 +26,7 @@ EverMindIQ/
 ├── admin/      # Operator console (React + Vite), talks to the backend's /admin API
 ├── site/       # Public marketing site — static HTML, no build step
 ├── infra/      # Terraform (GCS+CMEK, Firestore, Pub/Sub, Cloud Run, Secret Manager)
+├── tools/      # One-off generators (branding/ regenerates every app icon)
 ├── docs/       # Architecture & design docs
 └── README.md
 ```

@@ -24,6 +24,46 @@ locals {
   ]
 }
 
+# Backend configuration read straight out of `backend/config/production.env`, so
+# the file a developer edits is the file production runs.
+#
+# production.env is gitignored and therefore machine-local, so this falls back to
+# the committed production.env.example when it is absent (a fresh clone, or CI).
+# A test in backend/tests/test_model_config_consistency.py keeps the model ids in
+# step, so that fallback is the same value rather than a surprise. The Azure
+# credential is *not* in the example, and deliberately so — see the precondition
+# on the secret version below, which fails the apply loudly rather than quietly
+# publishing an empty secret.
+locals {
+  prod_env_path = "${path.module}/../backend/config/production.env"
+  env_file_path = fileexists(local.prod_env_path) ? local.prod_env_path : "${path.module}/../backend/config/production.env.example"
+  env_lines     = [for l in split("\n", file(local.env_file_path)) : trimspace(l)]
+
+  # Model ids never contain "=", so splitting on the first one is enough.
+  env_models = {
+    for line in local.env_lines :
+    trimspace(split("=", line)[0]) => trimspace(split("=", line)[1])
+    if length(regexall("^VOICEIQ_MODEL_[A-Z_]+=.+$", line)) > 0
+  }
+
+  # The variables remain as a floor: a slot missing from the file still deploys
+  # something valid rather than falling through to whatever the image defaults to.
+  model_reasoning = lookup(local.env_models, "VOICEIQ_MODEL_REASONING", var.model_reasoning)
+  model_live      = lookup(local.env_models, "VOICEIQ_MODEL_LIVE", var.model_live)
+  model_embedding = lookup(local.env_models, "VOICEIQ_MODEL_EMBEDDING", var.model_embedding)
+
+  # The ACS connection string is `endpoint=https://...;accesskey=...` — it
+  # contains "=" itself, so it must be captured whole rather than split. Marked
+  # sensitive so it cannot surface in plan output or an error message.
+  acs_connection_string = sensitive(trimspace(
+    try(regex("(?m)^VOICEIQ_ACS_CONNECTION_STRING=(.+)$", join("\n", local.env_lines))[0], "")
+  ))
+  # The sender address is not a secret and is readable in the console anyway.
+  acs_sender = trimspace(
+    try(regex("(?m)^VOICEIQ_ACS_SENDER=(.+)$", join("\n", local.env_lines))[0], "")
+  )
+}
+
 resource "google_project_service" "enabled" {
   for_each           = toset(local.services)
   service            = each.value
@@ -150,13 +190,47 @@ resource "google_service_account_iam_member" "backend_token_creator" {
   member             = "serviceAccount:${google_service_account.backend.email}"
 }
 
-# --- Secret for the app config (e.g. model ids / API keys) ------------------
+# --- Secrets ----------------------------------------------------------------
+# Kept, not removed. Nothing in the backend reads Secret Manager directly and
+# nothing references this secret, but it holds a version added by hand during the
+# real-mode verification pass, and dropping it from the config would have
+# Terraform delete that. Retire it deliberately once its contents are known to be
+# dead, rather than as a side effect of adding the secret below.
 resource "google_secret_manager_secret" "app" {
   secret_id = "voiceiq-app"
   replication {
     auto {}
   }
   depends_on = [google_project_service.enabled]
+}
+
+# The Azure Communication Services connection string, which is what lets the
+# backend send sign-in codes. It is the one runtime credential the service
+# cannot derive from its own identity: everything else (Firestore, GCS, KMS,
+# Vertex) is reached with the service account, so nothing else needs storing.
+resource "google_secret_manager_secret" "acs_connection" {
+  secret_id = "voiceiq-acs-connection"
+  replication {
+    auto {}
+  }
+  depends_on = [google_project_service.enabled]
+}
+
+# The value comes from backend/config/production.env, so that file stays the one
+# place a developer edits. The precondition matters: production.env is gitignored,
+# and without it Terraform would fall back to production.env.example, where this
+# value is deliberately blank — publishing an empty secret and silently breaking
+# sign-in email. Fail the apply instead, and say what to do about it.
+resource "google_secret_manager_secret_version" "acs_connection" {
+  secret      = google_secret_manager_secret.acs_connection.id
+  secret_data = local.acs_connection_string
+
+  lifecycle {
+    precondition {
+      condition     = local.acs_connection_string != ""
+      error_message = "VOICEIQ_ACS_CONNECTION_STRING is empty. It lives in backend/config/production.env, which is gitignored — recreate it from production.env.example (see backend/README.md) before applying."
+    }
+  }
 }
 
 # --- Cloud Run service ------------------------------------------------------
@@ -194,16 +268,20 @@ resource "google_cloud_run_v2_service" "api" {
         name  = "VOICEIQ_FIREBASE_PROJECT"
         value = var.project_id
       }
-      # Model slots. Pinned to concrete GA ids that exist on Vertex in this
-      # region ("-latest" aliases 404 there). The embedder is forced to the
-      # 256-d Firestore vector index width in code.
+      # Model slots, sourced from backend/.env (see the locals block at the top).
+      # Every slot is wired explicitly: one left unset falls back to the image's
+      # own default, which is how VOICEIQ_MODEL_LIVE went missing.
       env {
         name  = "VOICEIQ_MODEL_EMBEDDING"
-        value = "text-multilingual-embedding-002"
+        value = local.model_embedding
       }
       env {
         name  = "VOICEIQ_MODEL_REASONING"
-        value = "gemini-2.5-flash"
+        value = local.model_reasoning
+      }
+      env {
+        name  = "VOICEIQ_MODEL_LIVE"
+        value = local.model_live
       }
       # Admin console access. Comma-separated; an empty value denies everyone,
       # which is the right default for a service that has just been deployed.
@@ -221,6 +299,25 @@ resource "google_cloud_run_v2_service" "api" {
       env {
         name  = "VOICEIQ_CORS_ORIGINS"
         value = var.cors_origins
+      }
+      # Email (Azure Communication Services). The connection string is mounted
+      # from Secret Manager rather than set as a literal, so the credential is
+      # never readable in the Cloud Run console, in `gcloud run describe`, or in
+      # a deploy log — only its name is. "latest" means a rotated secret reaches
+      # the service on its next revision, with no Terraform change.
+      env {
+        name = "VOICEIQ_ACS_CONNECTION_STRING"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.acs_connection.secret_id
+            version = "latest"
+          }
+        }
+      }
+      # The sender address is not a credential — it is on every email sent.
+      env {
+        name  = "VOICEIQ_ACS_SENDER"
+        value = local.acs_sender
       }
     }
     scaling {

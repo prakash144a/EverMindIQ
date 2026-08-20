@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../../core/tokens.dart';
 
-/// "How it works" — a short, warm explainer of the three things MemoriesIQ does.
+/// "How it works" — a short, warm explainer of what MemoriesIQ does, and of the
+/// privacy promise that makes people willing to put a life into it.
 /// Reachable from the menu; also suitable as a first-run intro.
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
@@ -18,18 +19,27 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   static const _slides = <(_SlideArt, String, String)>[
     (
       _SlideArt.record,
-      'Speak a moment',
-      'Tap Record and just talk — in any language. Back-date it to any day it really happened.',
+      'Speak or write a moment',
+      'Tap Record and type it out — or switch to Speak and just talk. Either way, in any '
+          'language. Back-date it to any day it really happened.',
     ),
     (
       _SlideArt.recall,
       'Talk to your memories',
-      'Tap Recall and ask out loud. MemoriesIQ finds the moments that answer you, and reads them back.',
+      'Tap Recall and ask out loud, or chat by text. MemoriesIQ finds the moments that answer '
+          'you, and reads them back.',
     ),
     (
       _SlideArt.resurface,
       'Rediscover the past',
-      'Home resurfaces what happened on this day years ago, and marks the milestones worth keeping.',
+      'Home resurfaces what happened on this day years ago, and marks the milestones worth '
+          'keeping. Ask the AI about any of it out loud, or in chat.',
+    ),
+    (
+      _SlideArt.private,
+      'Yours, and only yours',
+      'Your memories are private. No one else can read them or hear your recordings — not other '
+          'people, and not the makers of this app.',
     ),
   ];
 
@@ -119,7 +129,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 }
 
-enum _SlideArt { record, recall, resurface }
+enum _SlideArt { record, recall, resurface, private }
 
 class _SlideArtwork extends StatelessWidget {
   const _SlideArtwork(this.art);
@@ -131,6 +141,7 @@ class _SlideArtwork extends StatelessWidget {
       _SlideArt.record => Icons.mic,
       _SlideArt.recall => Icons.auto_awesome,
       _SlideArt.resurface => Icons.history,
+      _SlideArt.private => Icons.lock_outline,
     };
     return Container(
       width: 132,

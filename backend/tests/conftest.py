@@ -8,7 +8,12 @@ import pytest
 os.environ.setdefault("VOICEIQ_MOCK", "1")
 os.environ.pop("VOICEIQ_GCP_PROJECT", None)
 
-# Settings also read backend/.env, which on a developer machine holds real Azure
+# Pin the config profile. A developer with VOICEIQ_ENV=production exported in
+# their shell would otherwise run the suite against config/production.env — real
+# project, real Azure credential. Overwrite, don't default.
+os.environ["VOICEIQ_ENV"] = "local"
+
+# Settings also read the config profile, and production.env holds real Azure
 # credentials. Blank them here — with `setdefault` these would leak through and a
 # test run would email real people. Not negotiable: overwrite, don't default.
 os.environ["VOICEIQ_ACS_CONNECTION_STRING"] = ""
@@ -98,6 +103,26 @@ def make_text_memory(client):
         return resp.json()
 
     return _make
+
+
+@pytest.fixture
+def lift_recording_limits(monkeypatch):
+    """Take the tier caps off recordings, for tests that are about something else.
+
+    The admin counters, the duration histogram and the daily rollups all need
+    recordings longer and more numerous than any tier allows — a 900-second one
+    just to have something in the "600+" bucket. Making those tests buy premium
+    and stay under it would be testing the entitlement twice and the statistic
+    not at all, so they lift the caps instead. Tests *about* the caps set them.
+    """
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "recording_max_seconds_free", 10_000)
+    monkeypatch.setattr(settings, "recording_max_seconds_premium", 10_000)
+    monkeypatch.setattr(settings, "recordings_per_month_free", 10_000)
+    monkeypatch.setattr(settings, "recordings_per_month_premium", 10_000)
+    return settings
 
 
 def set_tier(uid: str, tier: str) -> None:

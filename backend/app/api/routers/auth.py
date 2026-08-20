@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.core.activity import track_activity
-from app.core.entitlements import tier_for
+from app.core.entitlements import tier_and_voice_usage
 from app.core.security import CurrentUser, get_current_user
 from app.models.user import ProfileView, UserProfile, is_email, normalize_email
 from app.services.firestore import get_repository
@@ -52,7 +52,8 @@ class ProfilePatch(BaseModel):
 
 def _view(repo, uid: str, profile: UserProfile | None) -> ProfileView:
     """The profile as the app sees it, with the caller's entitlements attached."""
-    return ProfileView.of(profile, tier_for(repo, uid))
+    tier, voice_used = tier_and_voice_usage(repo, uid)
+    return ProfileView.of(profile, tier, voice_used)
 
 
 def _require_email(value: str) -> str:

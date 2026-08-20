@@ -3,10 +3,10 @@
 A living tracker for every phase and major work item. Update the status boxes as work lands.
 Aligns with the phased delivery in [architecture.md §8](./architecture.md).
 
-**Last updated:** 2026-08-17 (journals shipped — named containers plus **journal-scoped recall**,
-the second and stronger premium entitlement; typed memories + memory detail view before them; admin
-console live; backend `api:v10` deployed — **not yet redeployed with the text or journal
-endpoints**)
+**Last updated:** 2026-08-18 (**Talk-to-AI voice is real** — the app streams microphone PCM to
+Gemini Live over `/live` and plays Gemini's own voice back, replacing the on-device recognizer and
+text-to-speech entirely; journals and journal-scoped recall before it; admin console live; backend
+`api:v11` deployed — **not yet redeployed with the voice endpoint**)
 
 ## Status legend
 
@@ -27,38 +27,79 @@ endpoints**)
 
 | | |
 |---|---|
-| API | `https://voiceiq-api-fv2se2zeza-uc.a.run.app` — image `api:v10`, real mode |
+| API | `https://voiceiq-api-fv2se2zeza-uc.a.run.app` — image `api:v12`, real mode, revision
+`voiceiq-api-00015-7kz` (2026-08-19). **First deploy carrying voice `/live` audio**, the five tier
+limits and both delete paths. Does **not** carry the ingestion delete-race fix — see Phase 3.5. |
 | Admin console | `https://memoriesiq-admin.web.app` — allowlisted Google sign-in |
 | Marketing site | target `memoriesiq-site` created, **nothing published yet** (see 3.5) |
 | GCP / Firebase | project `voiceiq-505205`, region `us-central1` |
 | Android package | `com.memoriesiq.app` (registered in Firebase; the old `com.example.voiceiq` app still exists and can be deleted once a build is confirmed) |
 | CI | green on `f4f95f2` — backend, app, admin all pass; `deploy` skipped (gated on `DEPLOY_ENABLED`) |
-| Tests | 290 backend, 98 app, `ruff check app tests` clean, `tsc --noEmit` clean |
+| Tests | 300 backend, 105 app, `ruff check app tests` clean, `tsc --noEmit` clean |
 
 > **Before running Terraform in a fresh clone:** `infra/secrets.auto.tfvars` is **gitignored** and
 > must be recreated — it holds `billing_account` and `admin_emails`. Without it `apply` prompts for
 > the billing account and the admin allowlist is empty, which locks everyone out of `/admin` by
 > design. See [`infra/README.md`](../infra/README.md).
 
+> **Backend configuration is two profiles**, in `backend/config/`, selected by `VOICEIQ_ENV`
+> (unset = `local`). `local.env` is committed, secret-free, and covers local dev, the emulator and
+> the test suite; `production.env` is **gitignored** — it holds the ACS connection string and the
+> repo is public — with `production.env.example` committed in its place. `local.env` always loads
+> first and the profile layers on top, so `production.env` states only what differs.
+>
+> **Which model production runs:** `backend/config/production.env`. Terraform parses
+> `VOICEIQ_MODEL_*` out of it and sets those as Cloud Run env vars, so the file a developer edits is
+> the file production deploys — change a model there and `terraform apply` carries it (verified by
+> plan, 2026-08-18). A fresh clone or CI falls back to `production.env.example`, and
+> `backend/tests/test_model_config_consistency.py` (16 tests) keeps every copy — code defaults,
+> both profiles, `variables.tf`, and the `env` blocks in `main.tf` — from drifting, and asserts the
+> secret file stays out of git and out of the Cloud Build context. **The CI `deploy` job does not
+> carry model changes** — it runs `gcloud run deploy --image` with no `--set-env-vars`, which
+> preserves the service's existing environment; a model change needs `terraform apply`. Never use a
+> `-latest` alias: none is published on Vertex.
+>
+> **Email is wired to production** (2026-08-18). Terraform reads the ACS connection string from
+> `production.env`, stores it as a `voiceiq-acs-connection` Secret Manager version, and Cloud Run
+> mounts it into `VOICEIQ_ACS_CONNECTION_STRING` via `secret_key_ref` — so the credential is never a
+> readable value in the console, in `gcloud run describe`, or in a deploy log. The sender address is
+> a plain env var, being on every email anyway. A `precondition` fails the apply with a clear message
+> if the credential is empty, which is what a fresh clone would otherwise publish, silently breaking
+> sign-in email. **Not yet applied** — plan is `2 to add, 1 to change, 0 to destroy`. The unused
+> `google_secret_manager_secret.app` is deliberately kept: it holds a hand-added version from the
+> verification pass, and dropping it from the config would delete it.
+
 ## Next session — start here
 
 Ordered by what unblocks the most. (1) → (2) is the only real dependency; the rest are independent.
 
+0. **Redeploy for the delete-race fix** — Phase 3.5, and first because production is currently
+   wrong in a way the app promises it is not. `api:v12` still resurrects a memory deleted within
+   seconds of being created (see the Phase 3.5 entry). The fix is on `main` with 7 tests; it needs
+   `gcloud builds submit backend --tag …/api:v13` + `gcloud run deploy`, and an APK rebuild is *not*
+   required — nothing client-side changed.
 1. **Publish the marketing site** — Phase 3.5. Legal copy is complete; two values need a lawyer's
    sign-off first (governing jurisdiction, liability cap). One command once confirmed. Do this first
    because it produces the privacy-policy URL the Play listing requires.
 2. **Play Store readiness** — Cross-cutting. App signing is still debug keys. This is the real
    blocker to shipping the app at all, and it needs the URL from (1).
-3. **Verify cross-lingual recall** — Cross-cutting. The load-bearing unverified assumption for the
+3. **Hold a real voice conversation** — Phase 1. The redeploy is done (`api:v12`), so the endpoint
+   exists in production for the first time; the conversation has still never happened. Everything past
+   `client.aio.live.connect` is `# pragma: no cover` and the SDK's message shapes are the part most
+   likely to have moved. Do this in **Tamil or Hindi** and it also closes (4).
+4. **Verify cross-lingual recall** — Cross-cutting. The load-bearing unverified assumption for the
    target users; needs one real non-English recording through the live pipeline.
-4. **Automate deploys in CI** — Phase 0. Every deploy so far has been manual.
-5. **Decide what else premium unlocks** — Phase 3.5, product decision. It now gates typed-memory
-   length and journal count, so the machinery is real and there is something worth paying for; what
+5. **Automate deploys in CI** — Phase 0. Every deploy so far has been manual, and voice mode is now
+   the second feature in a row to sit undeployed behind that.
+6. **Decide what else premium unlocks** — Phase 3.5, product decision. It now gates five things —
+   monthly voice memories, recording length, conversation length, typed-memory length and journal
+   count — so the machinery is real and the three that cost money per minute are metered; what
    remains is whether it is *enough*, and there is still no purchase flow.
 
-> **Note:** the deployed image `api:v10` predates both `POST /recordings/text` and the whole
-> `/journals` surface. Write mode and Journals will 404 against production until the backend is
-> redeployed — which is another argument for (4).
+> **Note:** `api:v12` (2026-08-19) is the first image with the audio half of `/live`, so voice mode
+> can now reach the real Gemini Live model for the first time. Nobody has yet held a conversation
+> through it — (3) below is still open, and everything past `client.aio.live.connect` remains
+> unexercised against the real SDK.
 
 ---
 
@@ -124,7 +165,26 @@ Ordered by what unblocks the most. (1) → (2) is the only real dependency; the 
 - [x] Auth via Firebase ID token — app signs in with **Firebase Anonymous auth** and sends a live ID
   token; backend verifies it (REST + `/live` WS). **Verified end-to-end**: a real anonymous token →
   `GET /recordings` → 200. App Check: later.
-- [ ] Talk-to-AI **voice** (Gemini Live, client mic streaming over WSS) — **not built** (text only)
+- [~] **Talk-to-AI voice** (Gemini Live, client mic streaming over WSS) — **built, unverified against
+  the live model.** The app streams 16 kHz PCM16 from the mic over the existing `/live` socket and
+  plays Gemini's 24 kHz voice back; binary frames are audio, JSON frames are control. The on-device
+  `speech_to_text` and `flutter_tts` are **gone** — they were the reason every answer was read back
+  in an `en-US` voice to users whose memories are in Tamil or Hindi, and the whole point of moving to
+  native audio is that one model now hears and speaks those directly. Memories reach the model as a
+  `recall_memories` **tool** rather than as context injected per turn, because a spoken conversation
+  has no single question to retrieve for; the tool runs the same `pipeline.rag.retrieve` as the text
+  path and its hits are sent on as citations. Barge-in works by keeping the speaker's buffer shallow
+  (`flutter_pcm_sound` cannot flush what it has accepted) and dropping the rest on `interrupted`.
+  The model slot is pinned in `infra/main.tf` to **`gemini-live-2.5-flash-native-audio`** — the only
+  Live-API model published in `us-central1` for this project, and a native-audio one, so the voice
+  has real prosody instead of a synthesizer reading text. The code default `gemini-live-latest` would
+  have 404'd on connect: **no `-latest` alias is published on Vertex here at all** (confirmed against
+  the live publisher list, 2026-08-18), which is the same trap already noted for the reasoning and
+  embedding slots.
+  Note `flutter_pcm_sound` pins `compileSdkVersion 33` while its own androidx dependencies demand
+  34+, which fails the AAR metadata check for the whole build; `android/build.gradle.kts` now raises
+  any lagging plugin to the app's 36 rather than pinning the app back.
+  Promote to `[x]` once a real conversation has run against the deployed backend
 
 ## Phase 2 — Enrichment
 
@@ -138,7 +198,27 @@ Ordered by what unblocks the most. (1) → (2) is the only real dependency; the 
 - [~] Milestones — detection + ⭐ display present (`pipeline`, Home, Calendar); dedicated milestones view/management pending
 - [ ] Migrate retrieval to **Vertex AI Vector Search** (currently mock / Firestore-style)
 - [ ] Data export
-- [ ] Account-deletion purge across GCS + Firestore + vectors (`account` router exists; real purge stubbed)
+- [x] **Deleting a memory, and deleting an account** — both reachable from the app, and both total.
+  A memory takes its metadata, its chunks (the search index), its audio object **and the derived
+  caches** with it; the last one is the leak worth naming, because an On This Day feed item copies a
+  title and summary out of the recording and is served from storage, so without the purge a deleted
+  memory kept reading back to the person who deleted it (`_purge_derived_quietly`, pinned by
+  `tests/test_deletion.py`). Account deletion additionally sweeps journals, insights, feedback,
+  settings, stats, the device links and the email index, plus every object under the user's storage
+  prefix — by prefix, so it also collects blobs whose recording was never registered. The app asks
+  before either: a spelled-out dialog for one memory, and a screen that counts what is at stake and
+  requires typing DELETE for the account. Neither offers an undo, because there is not one
+- [x] **The delete-vs-ingestion race** (2026-08-19) — found by verifying the `api:v12` deploy against
+  production, *not* by the suite: deleting a memory within ~6s of creating it was silently undone,
+  because ingestion is a read-modify-write with a Pub/Sub hop and several seconds of Gemini in the
+  middle and its final write **upserted**. The resurrected record carried the transcript, summary,
+  tags and search index; `updated_at` sat 6 seconds after the purge, which is what gave it away.
+  Mock mode runs ingestion inline inside the create request, so offline there is no window and all
+  349 tests passed over it. Fixed by making `update_recording` **non-creating** (Firestore `update`,
+  not `set` — atomic, where a `get`-then-`set` guard would only shrink the race), turning a `None`
+  return into the existing `RecordingNotFound`, and discarding chunks the losing run had written.
+  Covers at-least-once redelivery for free, since the push handler already acks that exception.
+  7 tests, each verified to fail without the guard. **Not deployed** — production still has the bug
 - [ ] Retrieval / prompt tuning
 - [ ] Optional end-to-end encryption tier
 - [ ] ~~Switch accounts on one device~~ — **scoped and deliberately deferred** (2026-08-17). The
@@ -177,14 +257,26 @@ Ordered by what unblocks the most. (1) → (2) is the only real dependency; the 
 - [x] **Device ↔ account tracking** — install UUID (not a hardware id) sent as a request header and
   throttled to ~one write per user per day. Survives sign-out, so the console can show several
   accounts on one phone once account switching ships
-- [x] **Premium/free tier** — admin-set flag with an audit trail, and now a **real entitlement**: a
-  typed memory is capped at **1,000 characters on free, 10,000 on premium** (`core/entitlements.py`,
-  tunable via `VOICEIQ_TEXT_MAX_CHARS_*`). Enforced server-side on `POST /recordings/text` (413) and
-  mirrored in the compose field's counter via `GET /profile`. The tier is read from `userStats`,
-  which no client can write, so it cannot be self-granted. There is still **no purchase flow** —
-  premium is granted by an admin in the console — so the cap shows a plain counter and no upsell.
-  **Journals** are the second entitlement (2 free / 20 premium, `VOICEIQ_JOURNALS_MAX_*`), gated on
-  creation only so a downgrade is never destructive
+- [x] **Premium/free tier** — admin-set flag with an audit trail, and now **five real
+  entitlements**, all in `core/entitlements.py` and all read from `userStats`, which no client can
+  write, so none can be self-granted:
+
+  | Limit | Free | Premium | Setting |
+  | --- | --- | --- | --- |
+  | Voice memories per month | 10 | 100 | `VOICEIQ_RECORDINGS_PER_MONTH_*` |
+  | One recording | 60 s | 600 s | `VOICEIQ_RECORDING_MAX_SECONDS_*` |
+  | One spoken conversation | 600 s | 3600 s | `VOICEIQ_VOICE_SESSION_MAX_SECONDS_*` |
+  | Typed memory length | 1,000 chars | 10,000 | `VOICEIQ_TEXT_MAX_CHARS_*` |
+  | Journals | 2 | 20 | `VOICEIQ_JOURNALS_MAX_*` |
+
+  The three voice limits meter what actually costs money per minute; **typed memories are metered by
+  neither count nor time**, so the free tier stays usable as a notebook and running out of recordings
+  never costs someone a moment. All five ride along on `GET /profile` so the app can refuse *before*
+  the microphone opens — a 429 after the upload means the user spoke for nothing. The monthly counter
+  is `usage_month` + `voice_recordings_this_month` on `userStats`, deliberately not refunded on
+  delete. Every limit is gated on **creation only**, so a downgrade is never destructive. There is
+  still **no purchase flow** — premium is granted by an admin in the console — so the caps show plain
+  counters and no upsell
 - [x] **Marketing site** (`site/`) — static HTML for ad traffic, plus the privacy policy the Play
   listing requires. Legal copy complete: NATIVE MINDS AI LABS, WA, USA, `info@nativemindsai.com`
 - [x] **Firebase Hosting** — two targets (`site`, `admin`) in `firebase.json` + `.firebaserc`;
@@ -200,12 +292,13 @@ Ordered by what unblocks the most. (1) → (2) is the only real dependency; the 
   (**US$100**, a floor because the app is free, so "the amount you paid us" is $0; a literal $0 cap
   can be void as illusory in some jurisdictions and would take the whole clause with it). Both want a
   lawyer's confirmation before the site takes paid traffic
-- [~] **Decide what premium actually unlocks** — two things now: a 10× longer typed memory, and 20
-  journals against the free tier's 2. Journals are the stronger of the pair, because what they buy is
-  **scoped recall** rather than a bigger number. Both are ceilings rather than walls, and both are
-  enforced on *creation only*, so a lapsed subscription never strands anything. The product question
-  left is whether this is enough to charge for; a purchase flow does not exist, so premium remains
-  admin-granted
+- [~] **Decide what premium actually unlocks** — five things now (see the tier entry above). The
+  three voice limits are the ones with a cost story behind them: transcription, enrichment and a live
+  Gemini socket all bill per minute, so what premium sells there is *more of the expensive thing*
+  rather than a bigger number. Journals remain the strongest non-cost lever, because what they buy is
+  **scoped recall**. All five are ceilings rather than walls, enforced on *creation only*, so a lapsed
+  subscription never strands anything. The product question left is whether this is enough to charge
+  for; a purchase flow does not exist, so premium remains admin-granted
 
 ---
 
@@ -253,9 +346,11 @@ Ordered by what unblocks the most. (1) → (2) is the only real dependency; the 
 ## Cross-cutting / near-term cleanups
 
 - [ ] Android **release** readiness — the real blocker to shipping. Done: HTTPS backend, a Play-legal
-  application id (`com.memoriesiq.app`), launcher label. **Outstanding: app signing** (release builds
-  still use the debug keystore, per `app/android/app/build.gradle.kts`), a real launcher icon, and
-  the Play listing itself, which needs the privacy-policy URL from the marketing site
+  application id (`com.memoriesiq.app`), launcher label, and the **launcher icon** — "Rings", an
+  adaptive icon with a themed-icon monochrome layer plus legacy mipmaps for API 23–25, all generated
+  from `tools/branding/generate_icons.py`. **Outstanding: app signing** (release builds still use the
+  debug keystore, per `app/android/app/build.gradle.kts`) and the Play listing itself, which needs
+  the privacy-policy URL from the marketing site
 - [ ] Revisit the `record` dependency: the `record_linux: 1.3.1` override unblocks the build — consider bumping `record` to its aligned 6.x line instead
 - [x] **Real-mode end-to-end verification pass** (2026-08-16) — record → GCS/CMEK → Pub/Sub → Gemini →
   embeddings → Firestore → RAG recall, all exercised against live GCP with a real Firebase anonymous
@@ -307,7 +402,7 @@ Ordered by what unblocks the most. (1) → (2) is the only real dependency; the 
 | Phase | Done | Partial (mock) | Not started |
 |-------|:----:|:--------------:|:-----------:|
 | 0 — Foundations | 7 | 0 | 1 |
-| 1 — MVP | 11 | 0 | 1 |
+| 1 — MVP | 11 | 1 | 0 |
 | 2 — Enrichment | 0 | 2 | 2 |
 | 3 — Scale & polish | 0 | 1 | 6 |
 | 3.5 — Operations & launch | 11 | 1 | 1 |

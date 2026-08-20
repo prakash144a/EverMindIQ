@@ -2,14 +2,44 @@
 
 Loaded from environment (prefix ``VOICEIQ_``) and, in real mode, Secret Manager. When no GCP
 project is configured, ``mock`` defaults to True so the whole service runs in-memory.
+
+Two config files, one per profile, in ``backend/config``:
+
+``local.env``
+    Local development, the Android emulator, and the test suite. Committed, and
+    holds nothing secret.
+``production.env``
+    Real GCP, real Gemini, and the Azure credential. **Gitignored** — this
+    repository is public — with ``production.env.example`` committed in its place.
+
+``local.env`` always loads first as the base and the profile layers on top, so a
+profile only states what genuinely differs. The profile is chosen by
+``VOICEIQ_ENV``, which is *unset* by default: an unconfigured process gets the
+offline, credential-free profile rather than reaching for real infrastructure.
+
+Neither file reaches Cloud Run — the Dockerfile copies only ``pyproject.toml``
+and ``app/``. Production is configured by the env vars Terraform sets on the
+service, and Terraform reads the model ids out of ``production.env`` so that the
+file a developer edits is the one production runs.
 """
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
+_DEFAULT_PROFILE = "local"
+
+
+def _env_files() -> tuple[Path, Path]:
+    """The base profile and the selected one, in the order pydantic applies them."""
+    profile = (os.getenv("VOICEIQ_ENV") or _DEFAULT_PROFILE).strip() or _DEFAULT_PROFILE
+    return (_CONFIG_DIR / f"{_DEFAULT_PROFILE}.env", _CONFIG_DIR / f"{profile}.env")
 
 
 def _split(value: str) -> list[str]:
@@ -19,7 +49,7 @@ def _split(value: str) -> list[str]:
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="VOICEIQ_", env_file=".env", extra="ignore"
+        env_prefix="VOICEIQ_", env_file=_env_files(), extra="ignore"
     )
 
     # Mode ------------------------------------------------------------------
@@ -34,9 +64,17 @@ class Settings(BaseSettings):
     pubsub_ingest_topic: str = "voiceiq-ingest"
 
     # Model slots (independently swappable) --------------------------------
-    model_reasoning: str = "gemini-flash-latest"
-    model_live: str = "gemini-live-latest"
-    model_embedding: str = "text-multilingual-embedding-latest"
+    # Concrete Vertex ids, not "-latest" aliases: those exist on the Gemini
+    # Developer API but are **not published on Vertex** — the publisher list for
+    # this project in us-central1 has 128 models and not one ends in "latest",
+    # so an alias here fails the call outright. Override per environment with
+    # VOICEIQ_MODEL_* (backend/.env locally, Cloud Run env in production); these
+    # defaults are what the app runs on when nothing overrides them.
+    model_reasoning: str = "gemini-2.5-flash"
+    # Native-audio dialog: the model generates the waveform itself, with its own
+    # prosody, rather than producing text for a synthesizer to read.
+    model_live: str = "gemini-live-2.5-flash-native-audio"
+    model_embedding: str = "text-multilingual-embedding-002"
     embedding_dim: int = 256
 
     # Email (Azure Communication Services) ----------------------------------
@@ -82,6 +120,25 @@ class Settings(BaseSettings):
     # creating more.
     journals_max_free: int = 2
     journals_max_premium: int = 20
+
+    # How many *voice* memories a tier may create per calendar month. Typed
+    # memories are deliberately not metered: the cap exists because transcribing
+    # and enriching audio costs real money per minute, and typing costs nothing —
+    # the lever on typed memories is `text_max_chars_*` above.
+    recordings_per_month_free: int = 10
+    recordings_per_month_premium: int = 100
+
+    # How long one recording may be. The app stops the recorder at this number;
+    # the API rejects anything over it, which is the backstop for a client that
+    # did not.
+    recording_max_seconds_free: int = 60
+    recording_max_seconds_premium: int = 600
+
+    # How long one spoken conversation may last before the server hangs up.
+    # Per conversation, not per month: it bounds a single open Gemini Live socket,
+    # which is the thing that costs money while it is held.
+    voice_session_max_seconds_free: int = 600
+    voice_session_max_seconds_premium: int = 3600
 
     # Behavior --------------------------------------------------------------
     signed_url_ttl_seconds: int = 900

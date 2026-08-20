@@ -5,6 +5,7 @@ import '../../core/theme_mode_store.dart';
 import '../../data/models.dart';
 import '../../data/providers.dart';
 import '../../data/theme_mode_provider.dart';
+import '../account/delete_account_screen.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -113,6 +114,24 @@ class SettingsScreen extends ConsumerWidget {
                     _save(context, ref, s.copyWith(slideshowIntervalSec: v.round())),
               ),
             ),
+            const Divider(),
+            // Also linked from "Your account", but it has to live here as well:
+            // that screen is only reachable once an email is verified, and
+            // someone who never signed up still has an account, still has
+            // memories in it, and is still owed a way to destroy both. The
+            // privacy policy names settings as the place, so this is the one
+            // entry point that must always exist.
+            ListTile(
+              leading: Icon(Icons.delete_forever_outlined,
+                  color: Theme.of(context).colorScheme.error),
+              title: Text('Delete account',
+                  style: TextStyle(color: Theme.of(context).colorScheme.error)),
+              subtitle: const Text('Erase every memory, permanently'),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const DeleteAccountScreen()),
+              ),
+            ),
+            const SizedBox(height: 24),
           ],
         ),
       ),

@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from datetime import date, datetime, timezone
 from enum import Enum
-
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -113,6 +112,16 @@ class UserStats(BaseModel):
     previous_uids: list[str] = Field(default_factory=list)
 
     recordings_count: int = 0
+
+    # The monthly voice quota's meter. Two fields rather than a map keyed by
+    # month: a quota nobody can look back at does not need a history, and one
+    # counter beside the month it belongs to makes the roll-over a comparison
+    # instead of a cleanup job. `usage_month` is "YYYY-MM" in UTC; a value that
+    # is not the current month means the count is stale and reads as zero (see
+    # `services.stats.voice_recordings_in_month`).
+    usage_month: str = ""
+    voice_recordings_this_month: int = 0
+
     total_duration_sec: float = 0.0
     # High-water mark: the longest recording ever made, never decremented on
     # delete (you cannot decrement a max without rescanning). That is also the
@@ -167,7 +176,8 @@ class ProfileView(BaseModel):
     Carries the caller's entitlements as well as their identity. The app needs
     the typed-memory cap before the user starts typing, and folding it in here
     reuses a call the app already makes on launch rather than adding a second
-    round trip for one integer.
+    round trip for one integer. Every limit the app has to honour before it calls
+    an API now rides along for the same reason.
     """
 
     preferred_name: str = ""
@@ -182,16 +192,49 @@ class ProfileView(BaseModel):
     text_max_chars: int = 0
     journals_max: int = 0
 
+    # The monthly voice quota, and how much of it is gone. Both are sent because
+    # the app has to be able to stop someone *before* they record: discovering
+    # the quota from a 403 after the audio is already uploaded wastes their words.
+    recordings_per_month: int = 0
+    recordings_used_this_month: int = 0
+    recordings_month_resets_on: date | None = None
+
+    # Seconds. The recorder stops itself at `recording_max_sec` and voice mode
+    # counts down `voice_session_max_sec`, so both have to be known up front.
+    recording_max_sec: int = 0
+    voice_session_max_sec: int = 0
+
+    @property
+    def recordings_left_this_month(self) -> int:
+        return max(0, self.recordings_per_month - self.recordings_used_this_month)
+
     @classmethod
-    def of(cls, profile: UserProfile | None, tier: UserTier = UserTier.free) -> ProfileView:
+    def of(
+        cls,
+        profile: UserProfile | None,
+        tier: UserTier = UserTier.free,
+        recordings_used_this_month: int = 0,
+    ) -> ProfileView:
         # Imported here rather than at module scope: `core.entitlements` reads
         # settings and imports this module for `UserTier`.
-        from app.core.entitlements import max_journals, max_text_chars
+        from app.core.entitlements import (
+            max_journals,
+            max_recording_seconds,
+            max_recordings_per_month,
+            max_text_chars,
+            max_voice_session_seconds,
+        )
+        from app.services.stats import month_resets_on
 
         limits = {
             "tier": tier,
             "text_max_chars": max_text_chars(tier),
             "journals_max": max_journals(tier),
+            "recordings_per_month": max_recordings_per_month(tier),
+            "recordings_used_this_month": recordings_used_this_month,
+            "recordings_month_resets_on": month_resets_on(),
+            "recording_max_sec": max_recording_seconds(tier),
+            "voice_session_max_sec": max_voice_session_seconds(tier),
         }
         if profile is None:
             return cls(**limits)

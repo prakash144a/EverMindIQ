@@ -10,8 +10,9 @@ import 'package:voiceiq/src/data/api_client.dart';
 import 'package:voiceiq/src/data/providers.dart';
 import 'package:voiceiq/src/features/record/record_screen.dart';
 
-/// Writing a memory instead of speaking it: the screen must reach the text
+/// Writing a memory is the screen's default way in: it must reach the text
 /// endpoint directly, never the upload path, and must respect the tier's cap.
+/// Speaking is one tap away, and taking it must never start a capture by itself.
 void main() {
   late List<http.BaseRequest> sent;
 
@@ -68,26 +69,17 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
   }
 
-  Future<void> switchToWrite(WidgetTester tester) async {
-    await tester.tap(find.text('Write'));
-    await tester.pump();
-    // The cap comes from the profile fetch, which only starts once the compose
-    // body first builds; give it a frame to land.
-    await tester.pump(const Duration(milliseconds: 100));
-  }
-
-  testWidgets('opens in Speak mode with the mic off', (tester) async {
+  testWidgets('opens in Write mode, with nothing recording', (tester) async {
     await pumpRecord(tester);
 
-    expect(find.text('Tap the mic to start recording'), findsOneWidget);
-    expect(find.byType(TextField), findsNothing);
+    expect(find.byType(TextField), findsOneWidget);
+    expect(find.text('Tap the mic to start recording'), findsNothing);
     // Opening the screen must not start any capture or hit the server.
     expect(sent.any((r) => r.url.path.startsWith('/recordings')), isFalse);
   });
 
   testWidgets('writing a memory posts the text and never uploads audio', (tester) async {
     await pumpRecord(tester);
-    await switchToWrite(tester);
 
     await tester.enterText(find.byType(TextField), 'We drove to the coast at sunrise.');
     await tester.pump();
@@ -109,7 +101,6 @@ void main() {
 
   testWidgets('the text is trimmed before it is sent', (tester) async {
     await pumpRecord(tester);
-    await switchToWrite(tester);
 
     await tester.enterText(find.byType(TextField), '   A quiet afternoon.   ');
     await tester.pump();
@@ -122,7 +113,6 @@ void main() {
 
   testWidgets('an empty memory cannot be saved', (tester) async {
     await pumpRecord(tester);
-    await switchToWrite(tester);
 
     final button = tester.widget<FilledButton>(find.byType(FilledButton));
     expect(button.onPressed, isNull);
@@ -135,7 +125,6 @@ void main() {
 
   testWidgets('the free cap stops input at 1,000 characters', (tester) async {
     await pumpRecord(tester);
-    await switchToWrite(tester);
 
     final field = tester.widget<TextField>(find.byType(TextField));
     expect(field.maxLength, 1000);
@@ -152,14 +141,12 @@ void main() {
 
   testWidgets('premium raises the cap to 10,000', (tester) async {
     await pumpRecord(tester, tier: 'premium', textMaxChars: 10000);
-    await switchToWrite(tester);
 
     expect(tester.widget<TextField>(find.byType(TextField)).maxLength, 10000);
   });
 
   testWidgets('a rejected save keeps the text on screen', (tester) async {
     await pumpRecord(tester, saveFails: true);
-    await switchToWrite(tester);
 
     await tester.enterText(find.byType(TextField), 'Something worth keeping.');
     await tester.pump();
@@ -172,9 +159,8 @@ void main() {
     expect(controller.text, 'Something worth keeping.');
   });
 
-  testWidgets('switching back to Speak keeps the mic off', (tester) async {
+  testWidgets('switching to Speak keeps the mic off until it is tapped', (tester) async {
     await pumpRecord(tester);
-    await switchToWrite(tester);
     expect(find.byType(TextField), findsOneWidget);
 
     await tester.tap(find.text('Speak'));

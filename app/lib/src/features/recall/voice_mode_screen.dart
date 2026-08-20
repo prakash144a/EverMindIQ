@@ -1,22 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_tts/flutter_tts.dart';
-import 'package:speech_to_text/speech_recognition_result.dart';
-import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 import '../../core/config.dart';
 import '../../core/tokens.dart';
-import '../../data/ai_conversation.dart';
 import '../../data/auth.dart';
+import '../../data/live_voice.dart';
+import '../../data/providers.dart';
 import '../../widgets/immersive_chrome.dart';
 
-/// Live voice mode — a hands-free, streaming-style conversation with the memory
-/// AI. Opening it starts listening; you speak, it recalls, and the answer is
-/// read back aloud, then it listens again. No transcript or chat bubbles: just
-/// an audio-reactive splash that reflects listening / thinking / speaking.
+/// Live voice mode — a hands-free conversation with the memory AI, carried end
+/// to end by Gemini Live: the microphone streams up as PCM and the model's own
+/// voice comes back down the same socket.
 ///
-/// This is turn-based on top of the existing `/live` retrieval + on-device
-/// speech; native full-duplex Gemini Live audio is a later, deeper transport.
+/// Nothing here is turn-based any more. There is no on-device recognizer to
+/// wait for and no text-to-speech voice reading an answer back, which is what
+/// makes it work in the languages the memories are actually in — and what lets
+/// someone talk over the answer and be heard.
+///
+/// No chat bubbles: just an audio-reactive splash that reflects listening /
+/// thinking / speaking, with the model's own words underneath so a mis-heard
+/// question is visible rather than merely disappointing.
 class VoiceModeScreen extends ConsumerStatefulWidget {
   const VoiceModeScreen({super.key});
 
@@ -24,172 +27,77 @@ class VoiceModeScreen extends ConsumerStatefulWidget {
   ConsumerState<VoiceModeScreen> createState() => _VoiceModeScreenState();
 }
 
-enum _Phase { connecting, listening, thinking, speaking, error }
-
 class _VoiceModeScreenState extends ConsumerState<VoiceModeScreen> {
-  late final AiConversation _ai;
-  final stt.SpeechToText _speech = stt.SpeechToText();
-  final FlutterTts _tts = FlutterTts();
-
-  _Phase _phase = _Phase.connecting;
-  bool _active = true;
-  bool _awaitingReply = false;
-  bool _speechReady = false;
-  double _level = 0; // mic sound level while listening
-  int _aiSeen = 0;
+  late final LiveVoiceSession _voice;
 
   @override
   void initState() {
     super.initState();
     final auth = ref.read(firebaseAuthProvider);
-    _ai = AiConversation(() async =>
-        await auth.currentUser?.getIdToken() ?? AppConfig.devUid);
-    _ai.addListener(_onAi);
-    _ai.connect();
-    _initTts();
-    _boot();
+    _voice = LiveVoiceSession(
+      () async => await auth.currentUser?.getIdToken() ?? AppConfig.devUid,
+      // A call opened while Recall is scoped to one journal stays scoped to it,
+      // exactly as a typed question would.
+      journalId: ref.read(recallScopeProvider),
+    );
+    _voice.addListener(_onVoice);
+    _voice.start();
   }
 
   @override
   void dispose() {
-    _active = false;
-    _ai.removeListener(_onAi);
-    _ai.dispose();
-    _speech.stop();
-    _tts.stop();
+    _voice.removeListener(_onVoice);
+    _voice.dispose();
     super.dispose();
   }
 
-  Future<void> _initTts() async {
-    _tts.setCompletionHandler(() {
-      // Finished speaking the answer → listen again.
-      if (_active) _startListening();
-    });
-    _tts.setCancelHandler(() {
-      if (_active && _phase == _Phase.speaking) _startListening();
-    });
-    _tts.setErrorHandler((_) {
-      if (_active) _startListening();
-    });
-    try {
-      await _tts.setLanguage('en-US');
-      await _tts.setSpeechRate(0.5);
-      await _tts.awaitSpeakCompletion(true);
-    } catch (_) {/* best effort */}
-  }
-
-  Future<void> _boot() async {
-    try {
-      _speechReady = await _speech.initialize(
-        onStatus: (_) {
-          if (mounted) setState(() {});
-        },
-        onError: (_) {
-          if (_active) _startListening();
-        },
-      );
-    } catch (_) {
-      _speechReady = false;
-    }
-    if (!mounted) return;
-    if (!_speechReady) {
-      setState(() => _phase = _Phase.error);
-      return;
-    }
-    _startListening();
-  }
-
-  void _onAi() {
-    final aiCount = _ai.messages.where((m) => !m.fromUser).length;
-    if (aiCount > _aiSeen) {
-      _aiSeen = aiCount;
-      if (_awaitingReply && !_ai.thinking) {
-        _awaitingReply = false;
-        final reply = _ai.messages.lastWhere((m) => !m.fromUser).text;
-        _speak(reply);
-      }
-    }
+  void _onVoice() {
     if (mounted) setState(() {});
   }
 
-  Future<void> _startListening() async {
-    if (!_active) return;
-    try {
-      await _speech.stop();
-    } catch (_) {}
-    if (!_active || !mounted) return;
-    setState(() {
-      _phase = _Phase.listening;
-      _level = 0;
-    });
-    try {
-      await _speech.listen(
-        onResult: _onResult,
-        onSoundLevelChange: (l) {
-          if (mounted) setState(() => _level = l);
-        },
-        listenOptions: stt.SpeechListenOptions(
-          partialResults: true,
-          cancelOnError: true,
-          listenMode: stt.ListenMode.dictation,
-          listenFor: const Duration(seconds: 30),
-          pauseFor: const Duration(seconds: 3),
-        ),
-      );
-    } catch (_) {
-      if (mounted) setState(() => _phase = _Phase.error);
-    }
-  }
-
-  void _onResult(SpeechRecognitionResult r) {
-    if (!r.finalResult) return;
-    final text = r.recognizedWords.trim();
-    if (text.isEmpty) {
-      // Heard nothing usable — keep waiting.
-      if (_active) _startListening();
-      return;
-    }
-    setState(() {
-      _phase = _Phase.thinking;
-      _awaitingReply = true;
-    });
-    _ai.send(text);
-  }
-
-  Future<void> _speak(String text) async {
-    if (!_active) return;
-    setState(() => _phase = _Phase.speaking);
-    try {
-      await _tts.stop();
-      await _tts.speak(text);
-    } catch (_) {
-      if (_active) _startListening();
-    }
-  }
-
   Future<void> _end() async {
-    _active = false;
-    try {
-      await _speech.stop();
-    } catch (_) {}
-    try {
-      await _tts.stop();
-    } catch (_) {}
+    await _voice.stop();
     if (mounted) Navigator.of(context).maybePop();
   }
 
-  String get _label => switch (_phase) {
-        _Phase.connecting => 'Connecting…',
-        _Phase.listening => 'Listening…',
-        _Phase.thinking => 'Recalling…',
-        _Phase.speaking => 'Speaking…',
-        _Phase.error => 'Voice unavailable',
+  String get _label => switch (_voice.phase) {
+        VoicePhase.connecting => 'Connecting…',
+        VoicePhase.listening => 'Listening…',
+        VoicePhase.thinking => 'Recalling…',
+        VoicePhase.speaking => 'Speaking…',
+        VoicePhase.unavailable => 'Voice unavailable',
+        VoicePhase.timeUp => 'Time’s up',
       };
+
+  /// The line under the splash: what is being said, when there is something.
+  String get _caption {
+    if (_voice.phase == VoicePhase.timeUp) {
+      return 'This conversation reached its ${_minutes(_voice.limit)} limit. '
+          'Start another whenever you like.';
+    }
+    if (_voice.phase == VoicePhase.unavailable) return _voice.unavailableReason;
+    if (_voice.phase == VoicePhase.speaking && _voice.spoken.isNotEmpty) {
+      return _voice.spoken;
+    }
+    if (_voice.phase == VoicePhase.thinking && _voice.heard.isNotEmpty) {
+      return '“${_voice.heard}”';
+    }
+    return 'Speak naturally — ask anything about your memories.';
+  }
+
+  /// "1 hour" / "10 minute", read as an adjective ("its 10 minute limit"), so a
+  /// whole number of hours is said in hours rather than as 60 minutes.
+  static String _minutes(Duration d) {
+    final m = d.inMinutes;
+    if (m >= 60 && m % 60 == 0) {
+      final h = m ~/ 60;
+      return h == 1 ? '1 hour' : '$h hours';
+    }
+    return '$m minute';
+  }
 
   @override
   Widget build(BuildContext context) {
-    // Normalize the mic level (~ -2..10 on Android) into 0..1 for the splash.
-    final norm = ((_level + 2) / 12).clamp(0.0, 1.0);
     return ImmersiveChrome(
       child: Scaffold(
         body: Container(
@@ -211,28 +119,37 @@ class _VoiceModeScreenState extends ConsumerState<VoiceModeScreen> {
                   ),
                 ),
                 const Spacer(),
-                _VoiceSplash(phase: _phase, level: norm),
+                _VoiceSplash(phase: _voice.phase, level: _voice.level),
                 const SizedBox(height: Insets.xxl),
                 Text(
                   _label,
                   style: const TextStyle(
                       color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
                 ),
+                if (_voice.isTimed && _voice.phase != VoicePhase.timeUp) ...[
+                  const SizedBox(height: 6),
+                  _RemainingClock(remaining: _voice.remaining),
+                ],
                 const SizedBox(height: Insets.sm),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: Insets.xxl),
                   child: Text(
-                    _phase == _Phase.error
-                        ? "This device has no speech recognizer. Go back and type instead."
-                        : 'Speak naturally — ask anything about your memories.',
+                    _caption,
                     textAlign: TextAlign.center,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(color: Colors.white54, fontSize: 13),
                   ),
                 ),
                 const Spacer(),
                 Padding(
                   padding: const EdgeInsets.only(bottom: Insets.xxl),
-                  child: _EndButton(onTap: _end),
+                  // Once the server has hung up there is nothing left to end, so
+                  // the red button becomes the way out rather than a second one.
+                  child: _EndButton(
+                    onTap: _end,
+                    ended: _voice.phase == VoicePhase.timeUp,
+                  ),
                 ),
               ],
             ),
@@ -247,12 +164,12 @@ class _VoiceModeScreenState extends ConsumerState<VoiceModeScreen> {
 /// listening, a steady glow while thinking/speaking.
 class _VoiceSplash extends StatelessWidget {
   const _VoiceSplash({required this.phase, required this.level});
-  final _Phase phase;
+  final VoicePhase phase;
   final double level;
 
   @override
   Widget build(BuildContext context) {
-    final listening = phase == _Phase.listening;
+    final listening = phase == VoicePhase.listening;
     final reactive = listening ? level : 0.35;
     const base = 150.0;
     return SizedBox(
@@ -300,16 +217,19 @@ class _VoiceSplash extends StatelessWidget {
             ),
             child: Icon(
               switch (phase) {
-                _Phase.speaking => Icons.volume_up_rounded,
-                _Phase.thinking => Icons.auto_awesome,
-                _Phase.error => Icons.mic_off_rounded,
+                VoicePhase.speaking => Icons.volume_up_rounded,
+                VoicePhase.thinking => Icons.auto_awesome,
+                VoicePhase.unavailable => Icons.mic_off_rounded,
+                // An hourglass, not a crossed-out mic: the call ended because it
+                // ran its course, which is a different thing from a failure.
+                VoicePhase.timeUp => Icons.hourglass_bottom_rounded,
                 _ => Icons.mic_rounded,
               },
               color: Colors.white,
               size: 48,
             ),
           ),
-          if (phase == _Phase.thinking)
+          if (phase == VoicePhase.thinking)
             const SizedBox(
               width: base + 24,
               height: base + 24,
@@ -324,22 +244,57 @@ class _VoiceSplash extends StatelessWidget {
   }
 }
 
-class _EndButton extends StatelessWidget {
-  const _EndButton({required this.onTap});
-  final VoidCallback onTap;
+/// Time left in this conversation. A clock rather than a bar: someone deciding
+/// whether to ask one more question needs the number, not a proportion.
+class _RemainingClock extends StatelessWidget {
+  const _RemainingClock({required this.remaining});
+  final Duration remaining;
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: const Color(0xFFE5484D),
-      shape: const CircleBorder(),
-      child: InkWell(
-        customBorder: const CircleBorder(),
-        onTap: onTap,
-        child: const SizedBox(
-          width: 64,
-          height: 64,
-          child: Icon(Icons.close_rounded, color: Colors.white, size: 30),
+    final seconds = remaining.inSeconds;
+    // Amber for the last minute. Red would read as a fault, and running out of
+    // time you were told you had is not one.
+    final low = seconds <= 60;
+    final label = '${seconds ~/ 60}:${(seconds % 60).toString().padLeft(2, '0')} left';
+    return Semantics(
+      liveRegion: low,
+      child: Text(
+        label,
+        style: TextStyle(
+          color: low ? const Color(0xFFF5C46B) : Colors.white38,
+          fontSize: 12.5,
+          fontWeight: FontWeight.w600,
+          fontFeatures: const [FontFeature.tabularFigures()],
+        ),
+      ),
+    );
+  }
+}
+
+class _EndButton extends StatelessWidget {
+  const _EndButton({required this.onTap, this.ended = false});
+  final VoidCallback onTap;
+
+  /// The call is already over; this is now "close the screen".
+  final bool ended;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: ended ? 'Close' : 'End the conversation',
+      child: Material(
+        color: ended ? Colors.white.withValues(alpha: 0.16) : const Color(0xFFE5484D),
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: const SizedBox(
+            width: 64,
+            height: 64,
+            child: Icon(Icons.close_rounded, color: Colors.white, size: 30),
+          ),
         ),
       ),
     );

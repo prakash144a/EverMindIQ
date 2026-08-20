@@ -33,16 +33,45 @@ class MemoryDetailScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final recordings = ref.watch(recordingsProvider);
+    Recording? found;
+    for (final r in recordings.valueOrNull ?? const <Recording>[]) {
+      if (r.id == recordingId) found = r;
+    }
+    final rec = found;
     return Scaffold(
-      appBar: AppBar(title: const Text('Memory')),
+      appBar: AppBar(
+        title: const Text('Memory'),
+        actions: [
+          // Only once the memory has actually loaded: an overflow offering to
+          // delete something the screen cannot show yet is a way to delete the
+          // wrong thing.
+          if (rec != null)
+            PopupMenuButton<String>(
+              tooltip: 'More',
+              onSelected: (choice) {
+                if (choice == 'delete') deleteMemory(context, ref, rec);
+              },
+              itemBuilder: (context) => [
+                PopupMenuItem(
+                  value: 'delete',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.delete_outline,
+                        color: Theme.of(context).colorScheme.error),
+                    title: Text(
+                      'Delete memory',
+                      style: TextStyle(color: Theme.of(context).colorScheme.error),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+        ],
+      ),
       body: recordings.when(
         loading: () => const AppLoadingCard(height: 200),
         error: (e, _) => AppErrorCard('Could not load this memory: $e'),
-        data: (recs) {
-          Recording? rec;
-          for (final r in recs) {
-            if (r.id == recordingId) rec = r;
-          }
+        data: (_) {
           if (rec == null) {
             // Deleted, or on another device's account. Nothing to recover here.
             return const AppEmptyState(
@@ -54,6 +83,115 @@ class MemoryDetailScreen extends ConsumerWidget {
           return _Body(rec);
         },
       ),
+    );
+  }
+}
+
+/// Ask, then erase. Pops the screen on success, since what it was showing is
+/// gone.
+///
+/// The confirmation is deliberately heavier than the journal one next door.
+/// Deleting a journal moves memories to Unfiled and can be undone by hand;
+/// this destroys the only copy of something the user cannot write again — so
+/// the dialog spells out what goes, says plainly that we cannot get it back,
+/// and names the action "Delete forever" rather than "OK".
+Future<void> deleteMemory(BuildContext context, WidgetRef ref, Recording rec) async {
+  final scheme = Theme.of(context).colorScheme;
+  final title = rec.title.isEmpty ? 'this memory' : '“${rec.title}”';
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      icon: Icon(Icons.delete_forever_outlined, color: scheme.error),
+      title: const Text('Delete this memory?'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('You are about to delete $title.'),
+          const SizedBox(height: Insets.md),
+          // Itemised rather than summarised: "everything" is easy to skim past,
+          // and the audio is the part people do not expect to lose.
+          _GoesWith(rec.hasAudio
+              ? const [
+                  'The original recording — the audio itself',
+                  'Its transcript and summary',
+                  'Everything the AI found in it',
+                  'Its place in your timeline, journals and insights',
+                ]
+              : const [
+                  'The words you wrote',
+                  'Its summary',
+                  'Everything the AI found in it',
+                  'Its place in your timeline, journals and insights',
+                ]),
+          const SizedBox(height: Insets.md),
+          Text(
+            'This cannot be undone. We keep no copy anywhere, so nobody — including '
+            'us — can bring it back.',
+            style: TextStyle(fontWeight: FontWeight.w600, color: scheme.error),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(false),
+          child: const Text('Keep it'),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: scheme.error,
+            foregroundColor: scheme.onError,
+          ),
+          onPressed: () => Navigator.of(dialogContext).pop(true),
+          child: const Text('Delete forever'),
+        ),
+      ],
+    ),
+  );
+  if (confirmed != true || !context.mounted) return;
+
+  try {
+    await ref.read(recordingsProvider.notifier).remove(rec.id);
+    if (!context.mounted) return;
+    // No "Undo" action on this snackbar, deliberately. Offering one would be a
+    // lie: the audio object is already gone.
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('Memory deleted.')));
+    Navigator.of(context).maybePop();
+  } catch (e) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text('Could not delete that memory: $e')));
+  }
+}
+
+/// The bullet list of what a delete takes with it.
+class _GoesWith extends StatelessWidget {
+  const _GoesWith(this.items);
+  final List<String> items;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final item in items)
+          Padding(
+            padding: const EdgeInsets.only(bottom: Insets.xs),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.remove, size: 14, color: scheme.onSurfaceVariant),
+                const SizedBox(width: Insets.sm),
+                Expanded(
+                  child: Text(item,
+                      style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant)),
+                ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 }

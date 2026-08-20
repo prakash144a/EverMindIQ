@@ -129,6 +129,29 @@ class RecordingsNotifier extends AsyncNotifier<List<Recording>> {
       rethrow;
     }
   }
+
+  /// Erase a memory for good.
+  ///
+  /// Deliberately *not* optimistic, unlike the star and the journal picker. Those
+  /// roll back when the server disagrees; this cannot — a row that vanished and
+  /// then came back would read as the delete having failed silently, and there
+  /// is no way to tell the user which of the two states is the true one. So the
+  /// list only changes once the server has confirmed the memory is gone.
+  ///
+  /// The monthly voice allowance is not refunded — see the API's
+  /// `apply_recording_deleted` — so `profileProvider` is deliberately left alone.
+  Future<void> remove(String recordingId) async {
+    await ref.read(apiClientProvider).deleteRecording(recordingId);
+    state = AsyncData([
+      for (final r in state.valueOrNull ?? const <Recording>[])
+        if (r.id != recordingId) r,
+    ]);
+    // Anything the server derived from the corpus still counts a memory that no
+    // longer exists. (The entity lists and the timeline read this notifier
+    // directly, so they have already changed.)
+    ref.invalidate(onThisDayProvider);
+    ref.invalidate(insightProvider);
+  }
 }
 
 // Providers are named so a failure reads as "recordings" rather than an opaque

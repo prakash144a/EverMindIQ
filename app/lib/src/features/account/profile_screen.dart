@@ -6,6 +6,7 @@ import '../../data/models.dart';
 import '../../data/providers.dart';
 import '../../widgets/initials_avatar.dart';
 import '../../widgets/states.dart';
+import 'delete_account_screen.dart';
 
 /// Name, email, and what the account is for.
 class ProfileScreen extends ConsumerWidget {
@@ -94,6 +95,20 @@ class ProfileScreen extends ConsumerWidget {
                   : 'Without a verified email your memories only live on this install, '
                       'and are lost if the app is removed.',
               style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: Insets.xl),
+            const Divider(),
+            // Last, and visually apart. Closing the account is not a setting to
+            // be browsed past — it belongs at the end of the account screen,
+            // where someone looking for it will find it and nobody else will
+            // meet it on the way to something they wanted.
+            ListTile(
+              leading: Icon(Icons.delete_forever_outlined, color: scheme.error),
+              title: Text('Delete account', style: TextStyle(color: scheme.error)),
+              subtitle: const Text('Erase every memory, permanently'),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const DeleteAccountScreen()),
+              ),
             ),
           ],
         ),

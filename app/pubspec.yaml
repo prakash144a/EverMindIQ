@@ -19,8 +19,7 @@ dependencies:
   intl: ^0.19.0
   table_calendar: ^3.1.2
   google_fonts: ^6.2.1
-  speech_to_text: ^7.0.0
-  flutter_tts: ^4.2.0
+  flutter_pcm_sound: ^3.3.3
   firebase_core: ^3.0.0
   firebase_auth: ^5.0.0
 

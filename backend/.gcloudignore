@@ -3,6 +3,11 @@
 # .venv and wheelhouse alone are ~100 MB.
 .git
 .gitignore
+# Real credentials live here (config/production.env holds the ACS connection
+# string). The Dockerfile never copies them, but without these lines they still
+# ride along in the build context.
+.env
+config/
 .venv/
 wheelhouse/
 tests/

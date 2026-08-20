@@ -53,7 +53,7 @@ def test_creating_recordings_accumulates_counters(client):
     assert stats.last_recording_at is not None
 
 
-def test_counters_are_scoped_to_their_owner(client):
+def test_counters_are_scoped_to_their_owner(client, lift_recording_limits):
     _record(client, "alice", 12.0)
     _record(client, "bob", 99.0)
 
@@ -62,7 +62,7 @@ def test_counters_are_scoped_to_their_owner(client):
     assert _stats("bob").max_duration_sec == 99.0
 
 
-def test_deleting_decrements_the_count_but_not_the_maximum(client):
+def test_deleting_decrements_the_count_but_not_the_maximum(client, lift_recording_limits):
     """Encodes a deliberate decision, so it cannot be "fixed" by accident.
 
     A maximum cannot be decremented without rescanning every remaining
@@ -83,7 +83,7 @@ def test_deleting_decrements_the_count_but_not_the_maximum(client):
     assert short["id"]
 
 
-def test_recompute_lowers_a_stale_high_water_mark(client):
+def test_recompute_lowers_a_stale_high_water_mark(client, lift_recording_limits):
     """The escape hatch for the invariant above."""
     _record(client, "alice", 10.0)
     long_one = _record(client, "alice", 300.0)
