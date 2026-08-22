@@ -18,7 +18,7 @@ index.html      hero · the forgetting panel · four feature showcases ·
                 how it works · pricing · privacy · FAQ · CTA
 privacy.html    REQUIRED before the app can be listed on Google Play
 terms.html
-styles.v3.css   one file, theme-aware via prefers-color-scheme
+styles.v4.css   one file, theme-aware via prefers-color-scheme
 ```
 
 ## The illustrations
@@ -35,7 +35,7 @@ immersive capture gradient are the whole brand.
 Everything animates for feel and nothing animates for meaning, so `prefers-reduced-motion` switches
 all of it off in one rule at the bottom of the stylesheet. Keep it that way.
 
-Stylesheet filenames are versioned (`styles.v3.css`) because hosting serves CSS `immutable` for a
+Stylesheet filenames are versioned (`styles.v4.css`) because hosting serves CSS `immutable` for a
 year — a redesign needs a new URL or returning visitors keep the old one.
 
 ## Pricing and the store badges

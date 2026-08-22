@@ -57,6 +57,8 @@
 
 html {
   scroll-behavior: smooth;
+  /* Anchor jumps stop below the sticky header instead of behind it. */
+  scroll-padding-top: 92px;
 }
 
 body {
@@ -107,8 +109,27 @@ a {
 /* -- header ---------------------------------------------------------- */
 
 header {
+  /* Stays put while the page moves under it, like the company site's. On a
+     long scrolling page the nav is the only way back to a section without
+     flicking to the top, and Pricing is halfway down. */
+  position: sticky;
+  top: 0;
+  z-index: 50;
   padding: 22px 0;
   border-bottom: 1px solid var(--border);
+  /* Opaque first, so a browser without `color-mix` still gets a readable bar
+     rather than text over whatever is passing behind it. */
+  background: var(--bg);
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter: saturate(180%) blur(12px);
+}
+
+/* No blur available means no translucency either — the point of the tint is
+   that the blur makes it legible. */
+@supports not (backdrop-filter: blur(1px)) {
+  header {
+    background: var(--bg);
+  }
 }
 
 .bar {
