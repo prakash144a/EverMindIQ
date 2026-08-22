@@ -32,9 +32,19 @@ class AppConfig {
 
   /// WebSocket URL for the `/live` chat channel, authenticated with [token]
   /// (a Firebase ID token; the backend verifies it in real mode).
-  static Uri wsLiveUri(String token) {
+  /// The live-voice socket, carrying the same two credentials every REST call
+  /// does: who you are, and which sign-in this is. A socket without the session
+  /// is closed on connect, exactly like a request without it is refused.
+  static Uri wsLiveUri(String token, {String sessionId = ''}) {
     final base = Uri.parse(apiBaseUrl);
     final scheme = base.scheme == 'https' ? 'wss' : 'ws';
-    return base.replace(scheme: scheme, path: '/live', queryParameters: {'token': token});
+    return base.replace(
+      scheme: scheme,
+      path: '/live',
+      queryParameters: {
+        'token': token,
+        if (sessionId.isNotEmpty) 'session': sessionId,
+      },
+    );
   }
 }

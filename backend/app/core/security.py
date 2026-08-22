@@ -3,6 +3,11 @@
 In real mode the bearer token is verified with the Firebase Admin SDK. In mock mode the token is
 treated as the uid (or an ``X-Debug-Uid`` header is honored) so the API is exercisable in tests and
 local dev without real credentials.
+
+A valid token is only half of it. An account may be held by **one device at a time**, so app-facing
+requests also carry the session id issued at login and are refused when it is not the live one —
+see [require_live_session]. That refusal is the only way a phone that has been signed out elsewhere
+ever finds out, so it says which device replaced it and when, rather than a bare 401.
 """
 
 from __future__ import annotations
@@ -78,6 +83,50 @@ async def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token"
         )
     return _verify_firebase_token(creds.credentials, settings)
+
+
+async def require_live_session(
+    user: CurrentUser = Depends(get_current_user),
+    x_session_id: str | None = Header(default=None),
+) -> CurrentUser:
+    """Gate for everything the app does: a valid token *and* the live session.
+
+    Read straight from the repository on every request, with no cache. A cache
+    here would be a lie with a timer on it in both directions — the device that
+    just took the account over would be refused until its entry expired, and the
+    one that was signed out would keep working until then. Taking over is meant
+    to be immediate, and this is one small keyed read.
+    """
+    from app.services.firestore import get_repository
+
+    held = get_repository().get_session(user.uid)
+    if held is not None and held.session_id == (x_session_id or "").strip():
+        return user
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=_ended_session_detail(held),
+    )
+
+
+def _ended_session_detail(held) -> dict:
+    """Why this device is being turned away, in terms it can show its user.
+
+    Structured rather than prose: the app matches on `code` to decide whether to
+    explain a takeover or simply return to the login screen, and prose is not
+    something to pattern-match on.
+    """
+    if held is None:
+        return {
+            "code": "signed_out",
+            "message": "You have been signed out.",
+        }
+    return {
+        "code": "session_replaced",
+        "message": f"Your account was opened on {held.label}.",
+        "device": held.label,
+        "platform": held.platform,
+        "signed_in_at": held.signed_in_at.isoformat(),
+    }
 
 
 def _is_admin(user: CurrentUser, settings: Settings) -> bool:

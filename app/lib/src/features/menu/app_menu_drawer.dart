@@ -6,7 +6,6 @@ import '../../data/models.dart';
 import '../../data/providers.dart';
 import '../../widgets/initials_avatar.dart';
 import '../account/profile_screen.dart';
-import '../account/signup_screen.dart';
 import '../feedback/feedback_screen.dart';
 import '../journals/journals_screen.dart';
 import '../onboarding/onboarding_screen.dart';
@@ -41,7 +40,7 @@ class AppMenuDrawer extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             InkWell(
-              onTap: () => go(profile.hasProfile ? const ProfileScreen() : const SignupScreen()),
+              onTap: () => go(const ProfileScreen()),
               child: Padding(
                 padding: const EdgeInsets.all(Insets.xl),
                 child: Row(

@@ -66,16 +66,11 @@ class _DeleteAccountScreenState extends ConsumerState<DeleteAccountScreen> {
     await _releaseIdentity();
     if (!mounted) return;
 
-    // Back to a signed-out app, which the auth gate answers by creating a fresh
-    // anonymous account. Everything downstream re-fetches against that new uid
-    // and finds, correctly, nothing.
-    ref.invalidate(ensureSignedInProvider);
-    ref.invalidate(recordingsProvider);
-    ref.invalidate(journalsProvider);
-    ref.invalidate(profileProvider);
-    ref.invalidate(settingsProvider);
-    ref.invalidate(onThisDayProvider);
+    // Back to the login screen. The account behind this session no longer
+    // exists, so there is nothing to return to and nothing left to re-fetch.
+    await ref.read(authControllerProvider.notifier).signOut();
     ref.invalidate(insightProvider);
+    if (!mounted) return;
 
     final messenger = ScaffoldMessenger.of(context);
     Navigator.of(context).popUntil((route) => route.isFirst);

@@ -1,4 +1,4 @@
-from tests.conftest import auth
+from tests.conftest import ws_url
 
 
 def test_live_ws_requires_token(client):
@@ -13,7 +13,7 @@ def test_live_ws_requires_token(client):
 def test_live_ws_answers_from_memories(make_recording, client):
     make_recording("alice", "We adopted a golden retriever puppy named Max.")
 
-    with client.websocket_connect("/live?token=alice") as ws:
+    with client.websocket_connect(ws_url("alice")) as ws:
         ws.send_json({"question": "What did we name the puppy?"})
         resp = ws.receive_json()
     assert resp["citations"]
@@ -21,9 +21,7 @@ def test_live_ws_answers_from_memories(make_recording, client):
 
 
 def test_live_ws_rejects_empty_question(client):
-    # No auth setup needed beyond the token; empty question yields an error frame.
-    _ = auth  # keep import used
-    with client.websocket_connect("/live?token=bob") as ws:
+    with client.websocket_connect(ws_url("bob")) as ws:
         ws.send_json({"question": "   "})
         resp = ws.receive_json()
     assert "error" in resp

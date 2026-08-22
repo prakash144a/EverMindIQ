@@ -14,7 +14,7 @@ import struct
 
 from app.core.config import get_settings
 from app.services.live import OUTPUT_SAMPLE_RATE
-from tests.conftest import set_tier
+from tests.conftest import set_tier, ws_url
 
 
 def _collect_turn(ws) -> tuple[list[dict], bytes]:
@@ -36,7 +36,7 @@ def _collect_turn(ws) -> tuple[list[dict], bytes]:
 
 def test_handshake_reports_no_audio_in_mock(client):
     """Mock mode must say so, not pretend: the client picks its path from this."""
-    with client.websocket_connect("/live?token=alice") as ws:
+    with client.websocket_connect(ws_url("alice")) as ws:
         ws.send_json({"type": "audio_start"})
         ready = ws.receive_json()
     assert ready["type"] == "ready"
@@ -47,7 +47,7 @@ def test_handshake_reports_no_audio_in_mock(client):
 def test_turn_returns_transcripts_citations_and_audio(make_recording, client):
     make_recording("alice", "We adopted a golden retriever puppy named Max.")
 
-    with client.websocket_connect("/live?token=alice") as ws:
+    with client.websocket_connect(ws_url("alice")) as ws:
         ws.send_json({"type": "audio_start"})
         assert ws.receive_json()["type"] == "ready"
         ws.send_json({"type": "text_turn", "text": "What did we name the puppy?"})
@@ -100,7 +100,7 @@ def _spy_sessions():
 def test_microphone_audio_is_consumed(client):
     """Binary frames must reach the session rather than being answered or dropped."""
     with _spy_sessions() as opened:
-        with client.websocket_connect("/live?token=alice") as ws:
+        with client.websocket_connect(ws_url("alice")) as ws:
             ws.send_json({"type": "audio_start"})
             ws.receive_json()
             ws.send_bytes(b"\x00\x01" * 800)  # 1600 bytes of PCM16
@@ -112,7 +112,7 @@ def test_microphone_audio_is_consumed(client):
 
 def test_audio_before_session_is_ignored_not_fatal(client):
     """The client's first mic frames can outrun its own audio_start."""
-    with client.websocket_connect("/live?token=alice") as ws:
+    with client.websocket_connect(ws_url("alice")) as ws:
         ws.send_bytes(b"\x00" * 64)
         ws.send_json({"question": "anything at all?"})
         resp = ws.receive_json()
@@ -120,13 +120,13 @@ def test_audio_before_session_is_ignored_not_fatal(client):
 
 
 def test_text_turn_without_session_is_rejected(client):
-    with client.websocket_connect("/live?token=alice") as ws:
+    with client.websocket_connect(ws_url("alice")) as ws:
         ws.send_json({"type": "text_turn", "text": "hello"})
         assert ws.receive_json()["type"] == "error"
 
 
 def test_empty_turn_is_rejected(client):
-    with client.websocket_connect("/live?token=alice") as ws:
+    with client.websocket_connect(ws_url("alice")) as ws:
         ws.send_json({"type": "audio_start"})
         ws.receive_json()
         ws.send_json({"type": "text_turn", "text": "   "})
@@ -137,7 +137,7 @@ def test_text_protocol_still_works_after_audio_ends(make_recording, client):
     """One socket, two protocols: ending a call must not end the chat."""
     make_recording("alice", "We adopted a golden retriever puppy named Max.")
 
-    with client.websocket_connect("/live?token=alice") as ws:
+    with client.websocket_connect(ws_url("alice")) as ws:
         ws.send_json({"type": "audio_start"})
         ws.receive_json()
         ws.send_json({"type": "audio_end"})
@@ -158,7 +158,7 @@ def test_session_is_scoped_to_a_journal(client, make_text_memory):
         headers=auth("alice"),
     )
 
-    with client.websocket_connect("/live?token=alice") as ws:
+    with client.websocket_connect(ws_url("alice")) as ws:
         ws.send_json({"type": "audio_start", "journal_id": travel["id"]})
         ws.receive_json()
         ws.send_json({"type": "text_turn", "text": "What did I do at sunrise?"})
@@ -175,14 +175,14 @@ def test_session_is_scoped_to_a_journal(client, make_text_memory):
 def test_the_handshake_states_the_time_limit(client):
     """The app counts the call down on screen, so it has to be told the budget at
     the start rather than discovering it when the socket goes quiet."""
-    with client.websocket_connect("/live?token=alice") as ws:
+    with client.websocket_connect(ws_url("alice")) as ws:
         ws.send_json({"type": "audio_start"})
         assert ws.receive_json()["limit_sec"] == 600
 
 
 def test_premium_is_told_a_longer_one(client):
     set_tier("alice", "premium")
-    with client.websocket_connect("/live?token=alice") as ws:
+    with client.websocket_connect(ws_url("alice")) as ws:
         ws.send_json({"type": "audio_start"})
         assert ws.receive_json()["limit_sec"] == 3600
 
@@ -196,7 +196,7 @@ def test_the_call_is_ended_when_the_time_runs_out(client, monkeypatch):
     """
     monkeypatch.setattr(get_settings(), "voice_session_max_seconds_free", 1)
 
-    with client.websocket_connect("/live?token=alice") as ws:
+    with client.websocket_connect(ws_url("alice")) as ws:
         ws.send_json({"type": "audio_start"})
         assert ws.receive_json()["limit_sec"] == 1
         ended = ws.receive_json()
@@ -211,7 +211,7 @@ def test_ending_a_call_early_cancels_the_hang_up(client, monkeypatch):
     monkeypatch.setattr(get_settings(), "voice_session_max_seconds_free", 60)
 
     with _spy_sessions() as opened:
-        with client.websocket_connect("/live?token=alice") as ws:
+        with client.websocket_connect(ws_url("alice")) as ws:
             ws.send_json({"type": "audio_start"})
             ws.receive_json()
             assert opened[0]._deadline is not None, "the clock should be running"

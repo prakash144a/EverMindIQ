@@ -29,6 +29,8 @@ from app.models.journal import Journal
 from app.models.memory import MemoryFeed
 from app.models.recording import Chunk, Recording, RecordingStatus
 from app.models.user import (
+    DeviceSession,
+    LoginTicket,
     OtpChallenge,
     UserProfile,
     UserSettings,
@@ -73,6 +75,10 @@ class Repository:
         self._email_index: dict[str, str] = {}
         # normalized email -> pending OTP
         self._otps: dict[str, OtpChallenge] = {}
+        # uid -> the one device currently signed in to that account
+        self._sessions: dict[str, DeviceSession] = {}
+        # ticket -> a verified code waiting to be exchanged for a session
+        self._tickets: dict[str, LoginTicket] = {}
         # -- admin plane (mirrors the top-level Firestore collections) ------
         # uid -> stats
         self._stats: dict[str, UserStats] = {}
@@ -127,6 +133,37 @@ class Repository:
     def delete_otp(self, email: str) -> None:
         with self._lock:
             self._otps.pop(normalize_email(email), None)
+
+    # -- sessions ----------------------------------------------------------
+    # One per account, replaced on sign-in and removed on sign-out. Read on
+    # every authenticated request, which is why it is a single small document
+    # rather than a collection to scan.
+    def get_session(self, uid: str) -> DeviceSession | None:
+        with self._lock:
+            return self._sessions.get(uid)
+
+    def save_session(self, uid: str, session: DeviceSession) -> DeviceSession:
+        with self._lock:
+            self._sessions[uid] = session
+            return session
+
+    def clear_session(self, uid: str) -> None:
+        with self._lock:
+            self._sessions.pop(uid, None)
+
+    # -- login tickets -----------------------------------------------------
+    def get_login_ticket(self, ticket: str) -> LoginTicket | None:
+        with self._lock:
+            return self._tickets.get(ticket)
+
+    def save_login_ticket(self, ticket: LoginTicket) -> LoginTicket:
+        with self._lock:
+            self._tickets[ticket.ticket] = ticket
+            return ticket
+
+    def delete_login_ticket(self, ticket: str) -> None:
+        with self._lock:
+            self._tickets.pop(ticket, None)
 
     # -- journals ----------------------------------------------------------
     def list_journals(self, uid: str) -> list[Journal]:
@@ -577,66 +614,6 @@ class Repository:
             return sorted(self._audit, key=lambda e: e.at, reverse=True)[:limit]
 
     # -- merge (restore after reinstall) -----------------------------------
-    def merge_user(self, src_uid: str, dst_uid: str) -> dict[str, int]:
-        """Move everything owned by `src_uid` onto `dst_uid`; return what moved.
-
-        Used when someone reinstalls, records a few memories under the throwaway
-        anonymous identity, then verifies the email of an existing account. The
-        account's own settings and profile win; only content moves.
-
-        Callers MUST have proven the caller controls both sides — see
-        `app/api/routers/auth.py`. Nothing here checks that.
-        """
-        if src_uid == dst_uid:
-            return {"recordings": 0, "journals": 0, "feedback": 0, "insights": 0, "feeds": 0}
-        with self._lock:
-            # Journals move before the recordings that point at them. Ids are
-            # uuids, so nothing can collide, and `journal_id` is denormalized
-            # onto each recording — a restored memory must come back still
-            # filed where its owner filed it.
-            moved_journals = self._journals.pop(src_uid, {})
-            self._journals.setdefault(dst_uid, {}).update(moved_journals)
-
-            moved_recs = self._recordings.pop(src_uid, {})
-            for rec in moved_recs.values():
-                # uid is denormalized onto the document, so re-bucketing isn't enough.
-                rec.uid = dst_uid
-            self._recordings.setdefault(dst_uid, {}).update(moved_recs)
-
-            moved_feedback = self._feedback.pop(src_uid, {})
-            for item in moved_feedback.values():
-                item.uid = dst_uid
-            self._feedback.setdefault(dst_uid, {}).update(moved_feedback)
-
-            moved_insights = self._insights.pop(src_uid, {})
-            self._insights.setdefault(dst_uid, {}).update(moved_insights)
-
-            # Feeds are a derived cache keyed by date; drop rather than merge so
-            # the next read rebuilds them over the combined set.
-            moved_feeds = self._feeds.pop(src_uid, {})
-            self._feeds.pop(dst_uid, None)
-
-            self._users.pop(src_uid, None)
-            self._profiles.pop(src_uid, None)
-
-            # Fold the account's history onto the session that now owns it. See
-            # `stats.merge_stats` for why the direction matters so much.
-            src_stats = self._stats.pop(src_uid, None)
-            if src_stats is not None:
-                dst_stats, _ = self.ensure_user_stats(dst_uid)
-                self._stats[dst_uid] = stats_ops.merge_stats(src_stats, dst_stats)
-            for accounts in self._device_accounts.values():
-                accounts.pop(src_uid, None)
-            self._refresh_device_counts()
-        # Chunks are keyed by recording id, which is preserved, so they follow.
-        return {
-            "recordings": len(moved_recs),
-            "journals": len(moved_journals),
-            "feedback": len(moved_feedback),
-            "insights": len(moved_insights),
-            "feeds": len(moved_feeds),
-        }
-
     # -- account deletion (purge) -----------------------------------------
     def delete_user(self, uid: str) -> None:
         with self._lock:
@@ -651,6 +628,8 @@ class Repository:
             profile = self._profiles.pop(uid, None)
             if profile and profile.email:
                 self._email_index.pop(normalize_email(profile.email), None)
+            # Whoever is holding this account is holding nothing now.
+            self._sessions.pop(uid, None)
             # The install id is stored here and on the device link, and nowhere
             # else — deleting both is what makes it genuinely deletable.
             self._stats.pop(uid, None)
@@ -896,6 +875,35 @@ class FirestoreRepository:
 
     def delete_otp(self, email: str) -> None:
         self.db.collection("otpChallenges").document(normalize_email(email)).delete()
+
+    # -- sessions ----------------------------------------------------------
+    # In their own top-level collection rather than on ``users/{uid}``: that
+    # document is client-writable by its owner (see `firestore.rules`), and a
+    # session someone can rewrite from the app is not a session.
+    def get_session(self, uid: str) -> DeviceSession | None:
+        snap = self.db.collection("sessions").document(uid).get()
+        return DeviceSession(**snap.to_dict()) if snap.exists else None
+
+    def save_session(self, uid: str, session: DeviceSession) -> DeviceSession:
+        self.db.collection("sessions").document(uid).set(session.model_dump(mode="json"))
+        return session
+
+    def clear_session(self, uid: str) -> None:
+        self.db.collection("sessions").document(uid).delete()
+
+    # -- login tickets -----------------------------------------------------
+    def get_login_ticket(self, ticket: str) -> LoginTicket | None:
+        snap = self.db.collection("loginTickets").document(ticket).get()
+        return LoginTicket(**snap.to_dict()) if snap.exists else None
+
+    def save_login_ticket(self, ticket: LoginTicket) -> LoginTicket:
+        self.db.collection("loginTickets").document(ticket.ticket).set(
+            ticket.model_dump(mode="json")
+        )
+        return ticket
+
+    def delete_login_ticket(self, ticket: str) -> None:
+        self.db.collection("loginTickets").document(ticket).delete()
 
     # -- journals ----------------------------------------------------------
     def list_journals(self, uid: str) -> list[Journal]:
@@ -1420,63 +1428,6 @@ class FirestoreRepository:
         return rows
 
     # -- merge (restore after reinstall) -----------------------------------
-    def merge_user(self, src_uid: str, dst_uid: str) -> dict[str, int]:
-        """See [Repository.merge_user]. Callers must have proven both sides."""
-        if src_uid == dst_uid:
-            return {"recordings": 0, "journals": 0, "feedback": 0, "insights": 0, "feeds": 0}
-
-        moved = {"recordings": 0, "journals": 0, "feedback": 0, "insights": 0, "feeds": 0}
-        # Journals first: `journal_id` is denormalized onto each recording, so a
-        # restored memory has to find the journal it names still there.
-        for journal in self.list_journals(src_uid):
-            self.save_journal(dst_uid, journal)
-            self._journals(src_uid).document(journal.id).delete()
-            moved["journals"] += 1
-
-        for rec in self.list_recordings(src_uid):
-            chunks = doc_to_chunks(self._chunks_doc(src_uid, rec.id).get().to_dict())
-            rec.uid = dst_uid  # denormalized onto the document
-            self.add_recording(rec)
-            if chunks:
-                self.save_chunks(dst_uid, rec.id, chunks)
-            self._chunks_doc(src_uid, rec.id).delete()
-            self._recordings(src_uid).document(rec.id).delete()
-            moved["recordings"] += 1
-
-        for item in self.list_feedback(src_uid):
-            src_id = item.id
-            item.uid = dst_uid
-            self.add_feedback(item)
-            self._user_doc(src_uid).collection("feedback").document(src_id).delete()
-            moved["feedback"] += 1
-
-        for snap in self._user_doc(src_uid).collection("insights").stream():
-            self.save_insight(dst_uid, Insight(**snap.to_dict()))
-            snap.reference.delete()
-            moved["insights"] += 1
-
-        # Feeds are a derived cache; drop both sides so the next read rebuilds
-        # over the combined set rather than serving a stale pre-merge answer.
-        for snap in self._user_doc(src_uid).collection("feeds").stream():
-            snap.reference.delete()
-            moved["feeds"] += 1
-        for snap in self._user_doc(dst_uid).collection("feeds").stream():
-            snap.reference.delete()
-
-        # Fold the account's history onto the session that now owns it, before
-        # the source disappears. `stats.merge_stats` documents why the direction
-        # of this call is so easy to get backwards.
-        src_stats = self.get_user_stats(src_uid)
-        if src_stats is not None:
-            dst_stats, _ = self.ensure_user_stats(dst_uid)
-            self.save_user_stats(stats_ops.merge_stats(src_stats, dst_stats))
-            for install_id in src_stats.install_ids:
-                self._device_doc(install_id).collection("accounts").document(src_uid).delete()
-            self._stats_doc(src_uid).delete()
-
-        self._user_doc(src_uid).delete()
-        return moved
-
     # -- account deletion (purge) -----------------------------------------
     def delete_user(self, uid: str) -> None:
         profile = self.get_profile(uid)
@@ -1488,6 +1439,8 @@ class FirestoreRepository:
                 snap.reference.delete()
         if profile and profile.email:
             self.db.collection("emailIndex").document(normalize_email(profile.email)).delete()
+        # Whoever is holding this account is holding nothing now.
+        self.clear_session(uid)
         # The install id lives on the stats document and the device link, and
         # nowhere else — removing both is what makes it genuinely deletable.
         stats = self.get_user_stats(uid)

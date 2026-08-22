@@ -106,11 +106,6 @@ class UserStats(BaseModel):
     platform: str = ""
     app_version: str = ""
 
-    # Signing in to an existing account merges it onto the caller's *current*
-    # uid and deletes the old one, so uids churn. Without this trail an
-    # account's history would vanish every time someone signed back in.
-    previous_uids: list[str] = Field(default_factory=list)
-
     recordings_count: int = 0
 
     # The monthly voice quota's meter. Two fields rather than a map keyed by
@@ -162,9 +157,73 @@ class OtpChallenge(BaseModel):
     expires_at: datetime
     sent_at: datetime = Field(default_factory=_utcnow)
     attempts: int = 0
-    # Who asked. Used to spot the reinstall case: if this differs from the uid
-    # already registered to the email, the caller is restoring, not signing up.
-    requester_uid: str = ""
+    # Which installation asked. The device that asks must be the device that
+    # answers, or a code glimpsed in someone else's inbox could be redeemed
+    # elsewhere. Bound to the install id rather than to an account, because at
+    # this point in the flow there is no account and no session yet.
+    requester_install_id: str = ""
+
+    def is_expired(self, now: datetime | None = None) -> bool:
+        return (now or _utcnow()) >= self.expires_at
+
+
+def device_label(platform: str) -> str:
+    """How to name a device to the person being signed out of it.
+
+    Everything the server knows is the platform string, so this stays vague on
+    purpose: "an Android phone" is honest, "your Samsung Galaxy" would not be.
+    """
+    return {
+        "android": "an Android phone",
+        "ios": "an iPhone",
+        "macos": "a Mac",
+        "windows": "a Windows PC",
+        "linux": "a Linux computer",
+        "web": "a web browser",
+    }.get(platform.strip().lower(), "another device")
+
+
+class DeviceSession(BaseModel):
+    """One device's hold on an account.
+
+    An account has exactly one at a time. That is the whole design: these are
+    someone's private memories on a phone that may be shared, so signing in
+    somewhere new ends the previous session rather than running alongside it —
+    and signing out frees the phone for the next person entirely.
+    """
+
+    session_id: str
+    install_id: str = ""
+    platform: str = ""
+    app_version: str = ""
+    signed_in_at: datetime = Field(default_factory=_utcnow)
+
+    @property
+    def label(self) -> str:
+        return device_label(self.platform)
+
+
+class LoginTicket(BaseModel):
+    """A correct code, spent but not yet exchanged for a session.
+
+    Login is two steps because of what happens between them: a second device has
+    to be able to ask "sign the other one out?" *before* it takes over, and by
+    then the code is already burned. This is what it holds instead — single use,
+    short lived, and only redeemable from the device that earned it.
+    """
+
+    ticket: str
+    uid: str
+    email: str
+    expires_at: datetime
+    created_at: datetime = Field(default_factory=_utcnow)
+    # The device that verified, carried through so the session it opens is
+    # labelled with the phone the person is actually holding.
+    install_id: str = ""
+    platform: str = ""
+    app_version: str = ""
+    # A brand-new account, as opposed to signing back in to an existing one.
+    is_new_account: bool = False
 
     def is_expired(self, now: datetime | None = None) -> bool:
         return (now or _utcnow()) >= self.expires_at
@@ -250,6 +309,8 @@ class ProfileView(BaseModel):
 
 __all__ = [
     "MAX_TRAIL",
+    "DeviceSession",
+    "LoginTicket",
     "OtpChallenge",
     "ProfileView",
     "ThemeMode",
@@ -257,6 +318,7 @@ __all__ = [
     "UserSettings",
     "UserStats",
     "UserTier",
+    "device_label",
     "is_email",
     "normalize_email",
 ]

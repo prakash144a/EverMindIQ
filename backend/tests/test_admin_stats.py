@@ -5,11 +5,9 @@ user's recordings. That only pays off if they stay correct through deletion,
 account merges, and purges — which is what this file pins down.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from app.models.recording import Recording, RecordingStatus
-from app.models.user import UserTier
-from app.services import stats as stats_ops
 from app.services.firestore import Repository, get_repository
 from tests.conftest import admin_auth, auth
 
@@ -108,91 +106,6 @@ def test_deleting_never_drives_counters_negative(client):
 def test_feedback_is_counted(client):
     client.post("/feedback", json={"kind": "idea", "message": "add export"}, headers=auth("alice"))
     assert _stats("alice").feedback_count == 1
-
-
-# -- merge --------------------------------------------------------------
-#
-# `merge_user(src, dst)` is called by the OTP restore path as
-# `merge_user(account_uid, session_uid)` — src is the long-lived ACCOUNT and dst
-# is the fresh anonymous session. These tests exist because that direction is
-# the opposite of the intuitive reading, and getting it wrong corrupts data
-# permanently while looking fine in ordinary use.
-
-
-def test_merge_folds_the_accounts_counters_onto_the_session():
-    repo = Repository()
-    account, _ = repo.ensure_user_stats("account")
-    stats_ops.apply_recording_created(account, 120.0)
-    stats_ops.apply_recording_created(account, 20.0)
-    repo.save_user_stats(account)
-
-    session, _ = repo.ensure_user_stats("session")
-    stats_ops.apply_recording_created(session, 5.0)
-    repo.save_user_stats(session)
-
-    repo.merge_user("account", "session")
-
-    merged = repo.get_user_stats("session")
-    assert merged.recordings_count == 3
-    assert merged.total_duration_sec == 145.0
-    assert merged.max_duration_sec == 120.0
-    assert repo.get_user_stats("account") is None
-
-
-def test_merge_keeps_the_older_signup_date():
-    """Otherwise every sign-in resets the account's age to today."""
-    repo = Repository()
-    old = datetime.now(timezone.utc) - timedelta(days=400)
-
-    account, _ = repo.ensure_user_stats("account")
-    account.created_at = old
-    account.signup_day = old.date()
-    repo.save_user_stats(account)
-    repo.ensure_user_stats("session")
-
-    repo.merge_user("account", "session")
-
-    merged = repo.get_user_stats("session")
-    assert merged.created_at == old
-    assert merged.signup_day == old.date()
-
-
-def test_merge_never_downgrades_a_premium_account():
-    """The costliest way to get the merge direction wrong: signing back in
-    would silently revoke what the user paid for."""
-    repo = Repository()
-    account, _ = repo.ensure_user_stats("account")
-    account.tier = UserTier.premium
-    repo.save_user_stats(account)
-    repo.ensure_user_stats("session")  # a fresh anonymous session, free by default
-
-    repo.merge_user("account", "session")
-
-    assert repo.get_user_stats("session").tier == UserTier.premium
-
-
-def test_merge_preserves_the_old_uid_as_lineage():
-    """The source uid is deleted by the merge, so this is the only remaining
-    record that the account previously existed under it."""
-    repo = Repository()
-    repo.ensure_user_stats("account")
-    repo.ensure_user_stats("session")
-
-    repo.merge_user("account", "session")
-
-    assert repo.get_user_stats("session").previous_uids == ["account"]
-
-
-def test_merging_into_itself_changes_nothing():
-    repo = Repository()
-    stats, _ = repo.ensure_user_stats("alice")
-    stats_ops.apply_recording_created(stats, 10.0)
-    repo.save_user_stats(stats)
-
-    repo.merge_user("alice", "alice")
-
-    assert repo.get_user_stats("alice").recordings_count == 1
-    assert repo.get_user_stats("alice").previous_uids == []
 
 
 # -- purge --------------------------------------------------------------

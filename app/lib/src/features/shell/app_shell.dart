@@ -4,10 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/config.dart';
 import '../../core/tokens.dart';
 import '../../data/audio_playback.dart';
-import '../../data/models.dart';
 import '../../data/providers.dart';
 import '../../widgets/hero_action_button.dart';
-import '../account/signup_screen.dart';
 import '../home/home_screen.dart';
 import '../menu/app_menu_drawer.dart';
 import '../recall/recall_screen.dart';
@@ -15,10 +13,14 @@ import '../record/record_screen.dart';
 import '../settings/settings_screen.dart';
 
 /// Opens the record screen and, once something has been captured, refreshes the
-/// feed and offers to create a profile.
+/// feed.
 ///
 /// Top-level so the Home empty state can start a recording too — the nudge
 /// "tap Record to capture your first memory" should be tappable.
+///
+/// It used to end by asking the user to create an account, because until then
+/// their memories lived on the phone alone. Nothing reaches this screen without
+/// an account any more, so there is nothing left to ask.
 Future<void> openRecordScreen(BuildContext context, WidgetRef ref) async {
   // Don't let a playing memory bleed into the new recording.
   await ref.read(audioPlaybackProvider.notifier).stop();
@@ -30,17 +32,6 @@ Future<void> openRecordScreen(BuildContext context, WidgetRef ref) async {
 
   ref.invalidate(recordingsProvider);
   ref.invalidate(onThisDayProvider);
-
-  // The moment the first memory exists is the moment it's worth protecting, so
-  // this is where we ask — not before the user has seen the app do anything.
-  if (!context.mounted) return;
-  final profile = await ref.read(profileProvider.future).catchError((_) => const UserProfile());
-  if (!context.mounted) return;
-  if (!profile.hasProfile && !profile.signupPromptDismissed) {
-    await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const SignupScreen()),
-    );
-  }
 }
 
 /// App scaffold. Home is the single landing surface; the two hero actions —

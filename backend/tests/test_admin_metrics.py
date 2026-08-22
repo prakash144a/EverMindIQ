@@ -7,7 +7,7 @@ the raw collections instead would cost one read per recording, per page load.
 
 from datetime import datetime, timedelta, timezone
 
-from tests.conftest import admin_auth, auth
+from tests.conftest import admin_auth, auth, sign_in
 
 
 def _record(client, uid: str, duration: float) -> dict:
@@ -70,31 +70,26 @@ def test_an_anonymous_start_is_a_new_user_but_not_a_signup(client):
     assert _series(client, "email_signups")[0]["value"] == 0
 
 
-def _sign_up(client, uid: str, email: str) -> dict:
-    client.post("/auth/otp/request", json={"email": email}, headers=auth(uid))
-    code = client.post("/dev/last-otp", json={"email": email}, headers=auth(uid)).json()["code"]
-    return client.post(
-        "/auth/otp/verify", json={"email": email, "code": code}, headers=auth(uid)
-    ).json()
-
-
 def test_verifying_an_email_counts_as_a_signup(client):
-    assert _sign_up(client, "alice", "alice@example.com")["status"] == "signed_up"
+    assert sign_in(client, "alice@example.com")["status"] == "signed_up"
     assert _series(client, "email_signups")[0]["value"] == 1
 
 
 def test_signing_in_again_is_not_a_second_signup(client):
-    """Re-verifying an address you already own is the same account, not growth."""
-    _sign_up(client, "alice", "alice@example.com")
-    assert _sign_up(client, "alice", "alice@example.com")["status"] == "verified"
+    """Signing back in to an address you already own is the same account, not
+    growth — counting it would make every returning user look like a new one."""
+    first = sign_in(client, "alice@example.com")
+    again = sign_in(client, "alice@example.com", install_id="phone-b")
+    assert again["status"] == "signed_in"
+    assert again["uid"] == first["uid"]
 
     assert _series(client, "email_signups")[0]["value"] == 1
 
 
 def test_a_signup_shows_the_email_on_the_admin_row(client):
-    _sign_up(client, "alice", "alice@example.com")
+    uid = sign_in(client, "alice@example.com")["uid"]
 
-    row = client.get("/admin/users/alice", headers=admin_auth()).json()["user"]
+    row = client.get(f"/admin/users/{uid}", headers=admin_auth()).json()["user"]
     assert row["email"] == "alice@example.com"
     assert row["email_verified"] is True
 

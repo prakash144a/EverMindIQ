@@ -58,8 +58,69 @@ def client():
 
 
 def auth(uid: str) -> dict:
-    """Auth headers for `uid` (mock mode treats the bearer token as the uid)."""
-    return {"Authorization": f"Bearer {uid}"}
+    """Auth headers for `uid`: a bearer token, and the session that device holds.
+
+    Mock mode treats the bearer token as the uid. The session id is the other
+    half — an account may be held by one device at a time, so a token alone is
+    refused. Opening one here on demand keeps every test that is *about*
+    something else talking to the API the way a signed-in app does; the tests
+    about signing in and out drive the real endpoints instead (see
+    `test_auth_sessions.py`).
+    """
+    from app.models.user import DeviceSession
+    from app.services.firestore import get_repository
+
+    repo = get_repository()
+    held = repo.get_session(uid)
+    if held is None:
+        held = repo.save_session(
+            uid,
+            DeviceSession(
+                session_id=f"ses-{uid}", install_id=f"install-{uid}", platform="android"
+            ),
+        )
+    return {"Authorization": f"Bearer {uid}", "X-Session-Id": held.session_id}
+
+
+def sign_in(client, email: str, install_id: str = "phone-a", name: str = "") -> dict:
+    """Log in the way the app does. Returns `{uid, token, session_id, profile}`.
+
+    For tests that need a *real* account — one the email index knows about, with
+    a server-issued id — rather than the ad-hoc uid `auth()` conjures.
+    """
+    from app.services.otp import peek_mock_code
+
+    device = {"X-Install-Id": install_id, "X-Platform": "android", "X-App-Version": "1.0.0"}
+    asked = client.post("/auth/otp/request", json={"email": email}, headers=device)
+    assert asked.status_code == 204, asked.text
+    verified = client.post(
+        "/auth/otp/verify",
+        json={"email": email, "code": peek_mock_code(email), "preferred_name": name},
+        headers=device,
+    )
+    assert verified.status_code == 200, verified.text
+    claimed = client.post(
+        "/auth/session", json={"ticket": verified.json()["ticket"], "takeover": True}
+    )
+    assert claimed.status_code == 200, claimed.text
+    return {**claimed.json(), "status": verified.json()["status"]}
+
+
+def session_headers(body: dict) -> dict:
+    """Headers for the device that `sign_in` just signed in."""
+    return {"Authorization": f"Bearer {body['token']}", "X-Session-Id": body["session_id"]}
+
+
+def stale_auth(uid: str, session_id: str = "ses-gone") -> dict:
+    """Headers for a device whose session is no longer the live one."""
+    return {"Authorization": f"Bearer {uid}", "X-Session-Id": session_id}
+
+
+def ws_url(uid: str, path: str = "/live", **params: str) -> str:
+    """A WebSocket URL carrying the same credentials `auth` produces."""
+    session = auth(uid)["X-Session-Id"]
+    extra = "".join(f"&{k}={v}" for k, v in params.items())
+    return f"{path}?token={uid}&session={session}{extra}"
 
 
 def admin_auth() -> dict:

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/tokens.dart';
+import '../../data/auth.dart';
 import '../../data/models.dart';
 import '../../data/providers.dart';
 import '../../widgets/initials_avatar.dart';
@@ -39,6 +40,39 @@ class ProfileScreen extends ConsumerWidget {
     if (name == null || name.isEmpty) return;
     await ref.read(apiClientProvider).patchProfile(preferredName: name);
     ref.invalidate(profileProvider);
+  }
+
+  /// Hand the device back to whoever picks it up next.
+  ///
+  /// Confirmed first, because on a phone with one user it is a step backwards —
+  /// and because the memories are the point, the dialog says plainly that they
+  /// are not what is being left behind.
+  Future<void> _signOut(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Sign out?'),
+        content: const Text(
+          'Your memories stay in your account. Sign in with your email again — '
+          'here or on another device — to open them.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Sign out'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await ref.read(authControllerProvider.notifier).signOut();
+    // The gate swaps in the login screen underneath; this screen and whatever
+    // else is stacked on it belong to an account nobody is signed in to.
+    if (context.mounted) Navigator.of(context).popUntil((route) => route.isFirst);
   }
 
   @override
@@ -89,15 +123,20 @@ class ProfileScreen extends ConsumerWidget {
             ),
             const SizedBox(height: Insets.lg),
             Text(
-              p.hasProfile
-                  ? 'Your memories are tied to this email. If you reinstall the app or '
-                      'change phone, verify this address again to get them back.'
-                  : 'Without a verified email your memories only live on this install, '
-                      'and are lost if the app is removed.',
+              'Your memories are tied to this email, not to this phone. Sign in '
+              'with it on any device to open them there — one device at a time.',
               style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: Insets.xl),
             const Divider(),
+            // The other half of "one device at a time": this is how a shared
+            // phone gets handed to the next person.
+            ListTile(
+              leading: const Icon(Icons.logout_rounded),
+              title: const Text('Sign out'),
+              subtitle: const Text('Leave this device; your memories stay in your account'),
+              onTap: () => _signOut(context, ref),
+            ),
             // Last, and visually apart. Closing the account is not a setting to
             // be browsed past — it belongs at the end of the account screen,
             // where someone looking for it will find it and nobody else will

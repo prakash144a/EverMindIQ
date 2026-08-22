@@ -391,24 +391,3 @@ def test_starring_cannot_resurrect_a_memory_deleted_mid_request(client, monkeypa
     assert resp.status_code == 404
     monkeypatch.undo()
     assert client.get("/recordings", headers=auth("alice")).json() == []
-
-
-def test_the_email_is_released_so_the_address_can_sign_up_again(client):
-    """The email index is what makes a restore find the old account. Left behind,
-    the address is permanently claimed by an account that no longer exists."""
-    email = "someone@example.com"
-    client.post("/auth/otp/request", json={"email": email}, headers=auth("alice"))
-    code = client.post("/dev/last-otp", json={"email": email}, headers=auth("alice")).json()["code"]
-    client.post("/auth/otp/verify", json={"email": email, "code": code}, headers=auth("alice"))
-    assert client.get("/profile", headers=auth("alice")).json()["email_verified"] is True
-
-    client.delete("/account", headers=auth("alice"))
-
-    client.post("/auth/otp/request", json={"email": email}, headers=auth("carol"))
-    code = client.post("/dev/last-otp", json={"email": email}, headers=auth("carol")).json()["code"]
-    verified = client.post(
-        "/auth/otp/verify", json={"email": email, "code": code}, headers=auth("carol")
-    ).json()
-    # A fresh signup, not a restore of the deleted account.
-    assert verified["status"] == "signed_up"
-    assert client.get("/recordings", headers=auth("carol")).json() == []

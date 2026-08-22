@@ -1,55 +1,9 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:http/http.dart' as http;
-import 'package:http/testing.dart';
-import 'package:voiceiq/src/core/theme.dart';
-import 'package:voiceiq/src/data/api_client.dart';
 import 'package:voiceiq/src/data/models.dart';
-import 'package:voiceiq/src/data/providers.dart';
-import 'package:voiceiq/src/features/account/signup_screen.dart';
 import 'package:voiceiq/src/widgets/initials_avatar.dart';
 
 void main() {
-  late List<http.BaseRequest> sent;
-
-  setUp(() => sent = []);
-
-  Future<void> pumpSignup(
-    WidgetTester tester, {
-    bool restoreOnly = false,
-    int otpStatus = 204,
-  }) async {
-    final client = MockClient((req) async {
-      sent.add(req);
-      if (req.url.path == '/auth/otp/request') {
-        return http.Response(
-          otpStatus == 204 ? '' : '{"detail":"Please wait 42s"}',
-          otpStatus,
-        );
-      }
-      if (req.url.path == '/profile') {
-        return http.Response(jsonEncode({'has_profile': false}), 200);
-      }
-      return http.Response('{}', 200);
-    });
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          apiClientProvider
-              .overrideWithValue(ApiClient(client: client, baseUrl: 'http://test.invalid')),
-        ],
-        child: MaterialApp(
-          theme: AppTheme.light(),
-          home: SignupScreen(restoreOnly: restoreOnly),
-        ),
-      ),
-    );
-    await tester.pump();
-  }
-
   group('initials', () {
     test('a full name uses the first and last words', () {
       expect(initialsFor('Prakash Annadurai'), 'PA');
@@ -117,103 +71,42 @@ void main() {
     });
   });
 
-  group('VerifyResult', () {
-    test('a signup restores nothing', () {
-      final r = VerifyResult.fromJson({
-        'status': 'signed_up',
-        'profile': {'has_profile': true},
-      });
-      expect(r.isRestore, isFalse);
-      expect(r.restoredRecordings, 0);
+  group('sign-in parsing', () {
+    test('a clear verify carries a ticket and nothing in the way', () {
+      final r = VerifyResult.fromJson({'status': 'signed_up', 'ticket': 'tkt_1'});
+      expect(r.isNewAccount, isTrue);
+      expect(r.needsTakeover, isFalse);
+      expect(r.ticket, 'tkt_1');
     });
 
-    test('a restore reports how much came back', () {
+    test('a held account is reported as a question, not an error', () {
       final r = VerifyResult.fromJson({
-        'status': 'restored',
-        'merged': {'recordings': 2},
+        'status': 'signed_in',
+        'ticket': 'tkt_2',
+        'active_session': {
+          'device': 'an Android phone',
+          'platform': 'android',
+          'signed_in_at': '2026-08-21T16:12:00Z',
+        },
+      });
+      expect(r.needsTakeover, isTrue);
+      expect(r.activeSession!.device, 'an Android phone');
+      expect(r.activeSession!.signedInAt, isNotNull);
+    });
+
+    test('an unnamed device still reads as something', () {
+      expect(DeviceSessionInfo.fromJson(const {}).device, 'another device');
+    });
+
+    test('a claimed session carries the credential and the account', () {
+      final r = SignInResult.fromJson({
+        'uid': 'usr_1',
+        'token': 'tok',
+        'session_id': 'ses_1',
         'profile': {'preferred_name': 'Dhivya Varadhan', 'has_profile': true},
       });
-      expect(r.isRestore, isTrue);
-      expect(r.restoredRecordings, 2);
+      expect(r.sessionId, 'ses_1');
       expect(r.profile.initials, 'DV');
-    });
-  });
-
-  group('signup form', () {
-    testWidgets('asks for a name and email, then requests a code', (tester) async {
-      await pumpSignup(tester);
-
-      await tester.enterText(find.byType(TextField).first, 'Prakash Annadurai');
-      await tester.enterText(find.byType(TextField).last, 'p@example.com');
-      await tester.tap(find.text('Email me a code'));
-      await tester.pumpAndSettle();
-
-      final post = sent.firstWhere((r) => r.url.path == '/auth/otp/request') as http.Request;
-      expect(jsonDecode(post.body), {'email': 'p@example.com'});
-      expect(find.text('Enter your code'), findsOneWidget);
-    });
-
-    testWidgets('a missing name is refused before any request', (tester) async {
-      await pumpSignup(tester);
-
-      await tester.enterText(find.byType(TextField).last, 'p@example.com');
-      await tester.tap(find.text('Email me a code'));
-      await tester.pump();
-
-      expect(sent.any((r) => r.url.path == '/auth/otp/request'), isFalse);
-      expect(find.text('Please tell us what to call you.'), findsOneWidget);
-    });
-
-    testWidgets('a malformed email is refused before any request', (tester) async {
-      await pumpSignup(tester);
-
-      await tester.enterText(find.byType(TextField).first, 'Prakash');
-      await tester.enterText(find.byType(TextField).last, 'nope');
-      await tester.tap(find.text('Email me a code'));
-      await tester.pump();
-
-      expect(sent.any((r) => r.url.path == '/auth/otp/request'), isFalse);
-      expect(find.text('Please enter a valid email address.'), findsOneWidget);
-    });
-
-    testWidgets('restore mode asks only for the email', (tester) async {
-      await pumpSignup(tester, restoreOnly: true);
-
-      expect(find.byType(TextField), findsOneWidget);
-      expect(find.text('Restore'), findsOneWidget);
-    });
-
-    testWidgets('the signup form offers a restore path', (tester) async {
-      await pumpSignup(tester);
-      expect(find.textContaining('I already have an account'), findsOneWidget);
-
-      await tester.tap(find.textContaining('I already have an account'));
-      await tester.pump();
-
-      expect(find.byType(TextField), findsOneWidget, reason: 'the name field is dropped');
-    });
-
-    testWidgets('"Not now" records the dismissal so it stops asking', (tester) async {
-      await pumpSignup(tester);
-
-      await tester.tap(find.text('Not now'));
-      await tester.pumpAndSettle();
-
-      final patch = sent.firstWhere((r) => r.method == 'PATCH') as http.Request;
-      expect(patch.url.path, '/profile');
-      expect(jsonDecode(patch.body), {'signup_prompt_dismissed': true});
-    });
-
-    testWidgets('a rate-limited request keeps the user on the form', (tester) async {
-      await pumpSignup(tester, otpStatus: 429);
-
-      await tester.enterText(find.byType(TextField).first, 'Prakash');
-      await tester.enterText(find.byType(TextField).last, 'p@example.com');
-      await tester.tap(find.text('Email me a code'));
-      await tester.pumpAndSettle();
-
-      expect(find.textContaining('Could not send the code'), findsOneWidget);
-      expect(find.text('Enter your code'), findsNothing);
     });
   });
 }

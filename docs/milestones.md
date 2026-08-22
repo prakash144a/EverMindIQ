@@ -221,16 +221,20 @@ Ordered by what unblocks the most. (1) → (2) is the only real dependency; the 
   7 tests, each verified to fail without the guard. **Not deployed** — production still has the bug
 - [ ] Retrieval / prompt tuning
 - [ ] Optional end-to-end encryption tier
-- [ ] ~~Switch accounts on one device~~ — **scoped and deliberately deferred** (2026-08-17). The
-  client work is real (one anonymous Firebase session per account slot, held in named `FirebaseApp`
-  instances, since `signOut` on an anonymous user destroys that identity forever), but it sits on top
-  of an OTP flow that *moves* an account between uids rather than copying it: `merge_user` reattaches
-  everything to the caller and deletes the source. So adding an email that is already a slot on the
-  same phone silently empties the first slot, and restoring on a second device leaves the first
-  authenticating as a uid that no longer exists. Add the leaks the Riverpod cascade does not cover
-  (the audio player's decoded bytes, the `/live` socket's frozen token, `ErrorLog`), and it was not
-  worth the feature. `devices/{install_id}/accounts/{uid}` and the install-id design already support
-  it whenever this is revisited
+- [x] **Real accounts, one device at a time, and sign-out** (2026-08-22) — the deferred
+  switch-accounts feature, delivered by removing the thing that blocked it rather than working
+  around it. Identity is no longer the phone: `POST /auth/otp/verify` resolves a verified address to
+  a **permanent server-issued uid** and `POST /auth/session` mints a Firebase **custom token** for
+  it, so every device signing into one email authenticates as one account. `merge_user` is gone from
+  both repositories, along with the stats lineage it needed — and with it the orphaned-audio bug,
+  since an account id that never moves cannot strand blobs under an old storage prefix.
+  An account holds one `DeviceSession`; `require_live_session` gates every app-facing router and
+  refuses a superseded device with a structured 401 naming the device and time that replaced it (the
+  WS closes with 4403). Login is two steps so the second device can *ask* before signing the first
+  one out. `POST /auth/logout` plus a Sign out button is what makes one phone serve several people.
+  Login is now the app's gate — no anonymous browsing. 43 backend tests over the flows, 10 widget
+  tests over the screen; 352 + 138 green. **Breaking**: any installed build stops working against
+  this backend, so app and backend ship together
 
 ---
 

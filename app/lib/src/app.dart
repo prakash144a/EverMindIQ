@@ -8,6 +8,7 @@ import 'data/auth.dart';
 import 'data/models.dart';
 import 'data/providers.dart';
 import 'data/theme_mode_provider.dart';
+import 'features/account/login_screen.dart';
 import 'features/shell/app_shell.dart';
 
 class MemoriesIQApp extends ConsumerWidget {
@@ -28,22 +29,22 @@ class MemoriesIQApp extends ConsumerWidget {
   }
 }
 
-/// Signs the user in before showing the app. The backend requires a real
-/// Firebase ID token, so we must have a user before any request is made.
+/// Login, or the app. Nothing in between.
+///
+/// The memories belong to an email address rather than to this phone, so there
+/// is nothing to show until someone says which account they are — and when that
+/// account is opened on another device, this falls back here carrying the
+/// explanation for why.
 class _AuthGate extends ConsumerWidget {
   const _AuthGate();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final signIn = ref.watch(ensureSignedInProvider);
-    return signIn.when(
-      data: (_) => const _SettingsSync(child: AppShell()),
-      loading: () => const _SplashScreen(),
-      error: (e, _) => _SignInErrorScreen(
-        error: e,
-        onRetry: () => ref.invalidate(ensureSignedInProvider),
-      ),
-    );
+    final auth = ref.watch(authControllerProvider);
+    return switch (auth.stage) {
+      AuthStage.signedOut => LoginScreen(notice: auth.endedReason),
+      AuthStage.signedIn => const _SettingsSync(child: AppShell()),
+    };
   }
 }
 
@@ -72,45 +73,5 @@ class _SettingsSync extends ConsumerWidget {
     // loading -> data transition.
     ref.watch(settingsProvider);
     return child;
-  }
-}
-
-class _SplashScreen extends StatelessWidget {
-  const _SplashScreen();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Scaffold(body: Center(child: CircularProgressIndicator()));
-  }
-}
-
-class _SignInErrorScreen extends StatelessWidget {
-  const _SignInErrorScreen({required this.error, required this.onRetry});
-
-  final Object error;
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.cloud_off, size: 48),
-              const SizedBox(height: 12),
-              const Text('Could not sign in',
-                  style: TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 8),
-              Text('$error', textAlign: TextAlign.center),
-              const SizedBox(height: 16),
-              FilledButton(onPressed: onRetry, child: const Text('Retry')),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 }

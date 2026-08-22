@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -32,6 +32,7 @@ from app.api.routers import (
     settings as settings_router,
 )
 from app.core.config import get_settings
+from app.core.security import require_live_session
 
 log = logging.getLogger(__name__)
 
@@ -78,6 +79,7 @@ def create_app() -> FastAPI:
             "Authorization",
             "Content-Type",
             "X-Debug-Uid",
+            "X-Session-Id",
             "X-Install-Id",
             "X-Platform",
             "X-App-Version",
@@ -91,18 +93,28 @@ def create_app() -> FastAPI:
     def health() -> dict:
         return {"status": "ok", "mock": settings.effective_mock}
 
-    app.include_router(uploads.router)
-    app.include_router(recordings.router)
-    app.include_router(journals.router)
-    app.include_router(chat.router)
-    app.include_router(insights.router)
-    app.include_router(memories.router)
-    app.include_router(settings_router.router)
-    app.include_router(account.router)
+    # Everything the app itself calls goes through the session gate: a valid
+    # token is not enough, it must also be the device currently holding the
+    # account. Listed here rather than per router so that adding a router
+    # without the gate has to be a visible decision.
+    signed_in = [Depends(require_live_session)]
+    app.include_router(uploads.router, dependencies=signed_in)
+    app.include_router(recordings.router, dependencies=signed_in)
+    app.include_router(journals.router, dependencies=signed_in)
+    app.include_router(chat.router, dependencies=signed_in)
+    app.include_router(insights.router, dependencies=signed_in)
+    app.include_router(memories.router, dependencies=signed_in)
+    app.include_router(settings_router.router, dependencies=signed_in)
+    app.include_router(account.router, dependencies=signed_in)
+    # Not gated: this router *is* how a device gets a session. `/auth/logout`
+    # carries the gate on its own route.
     app.include_router(auth.router)
-    app.include_router(auth.profile_router)
-    app.include_router(feedback.router)
+    app.include_router(auth.profile_router, dependencies=signed_in)
+    app.include_router(feedback.router, dependencies=signed_in)
+    # Service-to-service, with no user session to speak of.
     app.include_router(internal.router)
+    # The WebSocket checks the session itself, on connect: a router dependency
+    # can only close the socket, and the app needs to be told why.
     app.include_router(live.router)
     # Always mounted, so the OpenAPI surface is the same everywhere. The guard
     # is a router-level dependency and an empty allowlist denies everyone, so

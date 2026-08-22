@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'firebase_options.dart';
 import 'src/app.dart';
 import 'src/core/device_identity.dart';
+import 'src/core/session_store.dart';
 import 'src/core/theme_mode_store.dart';
 import 'src/data/error_log.dart';
 
@@ -31,6 +32,9 @@ Future<void> main() async {
   // Resolved before the first request so every call can read it synchronously.
   // Its own failures are already handled internally, so this cannot block boot.
   await DeviceIdentity.ensure();
+  // Likewise: whether anyone is signed in on this device has to be known before
+  // the first frame decides between the app and the login screen.
+  await SessionStore.load();
   // Before runApp so the very first frame is already in the chosen mode
   // rather than flashing the OS default and correcting itself.
   await ThemeModeStore.load();

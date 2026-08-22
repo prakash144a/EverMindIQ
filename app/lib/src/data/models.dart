@@ -254,30 +254,79 @@ String initialsFor(String name) {
   return (words.first[0] + words.last[0]).toUpperCase();
 }
 
-/// Outcome of verifying a one-time code.
+/// A device signed in to an account, as the server describes it.
 ///
-/// A restore moves the account onto the current session rather than switching
-/// sessions, so there is no token to exchange and nothing to re-authenticate.
-class VerifyResult {
-  /// "signed_up" | "verified" | "restored"
-  final String status;
-  final UserProfile profile;
+/// Vague on purpose — "an Android phone" is all the server honestly knows, and
+/// it is enough for someone to recognise which of their own devices it is.
+class DeviceSessionInfo {
+  final String device;
+  final String platform;
+  final DateTime? signedInAt;
 
-  /// For "restored": how many recordings came back.
-  final int restoredRecordings;
+  const DeviceSessionInfo({
+    required this.device,
+    this.platform = '',
+    this.signedInAt,
+  });
+
+  factory DeviceSessionInfo.fromJson(Map<String, dynamic> j) => DeviceSessionInfo(
+        device: asText(j['device']).isEmpty ? 'another device' : asText(j['device']),
+        platform: asText(j['platform']),
+        signedInAt: DateTime.tryParse(asText(j['signed_in_at']))?.toLocal(),
+      );
+}
+
+/// Outcome of verifying a one-time code: a ticket, and whatever stands in the
+/// way of spending it.
+///
+/// [activeSession] being set is not a failure — it is the question the second
+/// device has to ask before signing the first one out.
+class VerifyResult {
+  /// "signed_up" (the address had no account) | "signed_in" (it did)
+  final String status;
+  final String ticket;
+  final DeviceSessionInfo? activeSession;
 
   const VerifyResult({
     required this.status,
-    required this.profile,
-    this.restoredRecordings = 0,
+    required this.ticket,
+    this.activeSession,
   });
 
-  bool get isRestore => status == 'restored';
+  bool get isNewAccount => status == 'signed_up';
+  bool get needsTakeover => activeSession != null;
 
-  factory VerifyResult.fromJson(Map<String, dynamic> j) => VerifyResult(
-        status: asText(j['status']),
+  factory VerifyResult.fromJson(Map<String, dynamic> j) {
+    final held = (j['active_session'] as Map?)?.cast<String, dynamic>();
+    return VerifyResult(
+      status: asText(j['status']),
+      ticket: asText(j['ticket']),
+      activeSession: held == null ? null : DeviceSessionInfo.fromJson(held),
+    );
+  }
+}
+
+/// A claimed session: the credential this device signs in with, and who it is.
+class SignInResult {
+  final String uid;
+
+  /// Exchanged for a Firebase session. In mock mode it is simply the uid.
+  final String token;
+  final String sessionId;
+  final UserProfile profile;
+
+  const SignInResult({
+    required this.uid,
+    required this.token,
+    required this.sessionId,
+    required this.profile,
+  });
+
+  factory SignInResult.fromJson(Map<String, dynamic> j) => SignInResult(
+        uid: asText(j['uid']),
+        token: asText(j['token']),
+        sessionId: asText(j['session_id']),
         profile: UserProfile.fromJson((j['profile'] as Map?)?.cast<String, dynamic>() ?? {}),
-        restoredRecordings: asInt((j['merged'] as Map?)?['recordings']),
       );
 }
 

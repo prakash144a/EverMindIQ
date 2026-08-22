@@ -1,10 +1,9 @@
 """Devices and the accounts on them.
 
-The planned switch-account feature means one phone will host several accounts:
-sign out, sign in with a different email, same device. The install id is device
-state and survives sign-out, which is exactly what lets the console show that
-relationship. It runs the other way too — one account can appear on several
-devices, via a second phone or a reinstall.
+One phone hosts several accounts: sign out, sign in with a different email, same
+device. The install id is device state and survives sign-out, which is exactly
+what lets the console show that relationship. It runs the other way too — one
+account can appear on several devices, though only one at a time may hold it.
 """
 
 from tests.conftest import admin_auth, auth

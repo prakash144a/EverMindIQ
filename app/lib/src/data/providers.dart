@@ -17,6 +17,10 @@ final apiClientProvider = Provider<ApiClient>((ref) {
       if (user == null) return null;
       return user.getIdToken();
     },
+    // Any call, anywhere, can be the one that discovers this device was signed
+    // out from another. Handling it here means no screen has to remember to.
+    onSessionEnded: (ended) =>
+        ref.read(authControllerProvider.notifier).endedRemotely(ended),
   );
 });
 

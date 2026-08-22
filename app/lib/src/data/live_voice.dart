@@ -9,6 +9,7 @@ import 'package:record/record.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../core/config.dart';
+import '../core/session_store.dart';
 
 /// A spoken conversation with the memory AI, streamed to and from Gemini Live.
 ///
@@ -56,6 +57,10 @@ const int _maxChunksAhead = 4;
 /// Ask for more samples while a fifth of a second is still queued, so the next
 /// chunk lands before the current one runs out.
 const int _feedThresholdFrames = _voiceSampleRate ~/ 5;
+
+/// The close code the backend uses for "this session is no longer the live one",
+/// kept distinct from 4401 (unauthorized) so the two can be said differently.
+const int _signedOutElsewhere = 4403;
 
 class LiveVoiceSession extends ChangeNotifier {
   LiveVoiceSession(this._tokenFetch, {this.journalId});
@@ -119,11 +124,18 @@ class LiveVoiceSession extends ChangeNotifier {
     }
     try {
       final token = await _tokenFetch() ?? AppConfig.devUid;
-      final channel = WebSocketChannel.connect(AppConfig.wsLiveUri(token));
+      final channel = WebSocketChannel.connect(
+        AppConfig.wsLiveUri(token, sessionId: SessionStore.sessionId),
+      );
       _channel = channel;
       _socketSub = channel.stream.listen(
         _onFrame,
-        onDone: () => _fail('The connection closed.'),
+        // 4403 is the server saying this device was signed out, not that
+        // anything broke — worth its own sentence, since a call ending
+        // mid-answer is where a takeover is most likely to be met first.
+        onDone: () => _fail(channel.closeCode == _signedOutElsewhere
+            ? 'You were signed out — your account was opened on another device.'
+            : 'The connection closed.'),
         onError: (_) => _fail('Lost the connection.'),
       );
       channel.sink.add(jsonEncode({

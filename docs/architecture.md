@@ -38,7 +38,8 @@ Cloud KMS (CMEK) • Secret Manager • Cloud Logging/Trace
 | Module            | Responsibility                                                        |
 |-------------------|-----------------------------------------------------------------------|
 | `core/config`     | Settings from env / Secret Manager; three swappable model slots.       |
-| `core/security`   | Firebase ID-token verification → `CurrentUser`; per-user scoping.      |
+| `core/security`   | Firebase ID-token verification → `CurrentUser`; the one-device session gate. |
+| `services/identity` | Permanent account ids, session ids, and the custom token a device signs in with. |
 | `models`          | Pydantic schemas (Recording, Chunk, Insight, MemoryFeed, chat DTOs).   |
 | `services/firestore` | Per-user document repository (isolation by `uid`).                 |
 | `services/storage`   | GCS signed upload/download URLs (CMEK bucket).                      |
@@ -78,9 +79,8 @@ users/{uid}/memoryFeed/{yyyy-mm-dd} items[]
 Per-user subcollections give natural isolation: security rules require `request.auth.uid == uid`.
 
 `journalId` is denormalized onto the recording rather than the journal holding a list of members:
-filtering is a scan either way, and a list would have to be rewritten on every capture. It means a
-merge must move journals before recordings, or a restored memory would name a container that is no
-longer there. A journal **name** is user-authored content — "Therapy", "Divorce", "Baby" describe a
+filtering is a scan either way, and a list would have to be rewritten on every capture. A journal
+**name** is user-authored content — "Therapy", "Divorce", "Baby" describe a
 life without quoting a word of it — so it falls under the same admin-plane prohibition as
 transcripts (§7).
 
@@ -219,8 +219,9 @@ cross-tenant read is impossible from a browser by construction.
 by `require_admin` as a router-level dependency so no endpoint can ship unguarded. An empty
 allowlist denies everyone. Email entries require `email_verified` on the token — Firebase's
 email/password provider issues tokens for unverified addresses, so without that check an allowlisted
-address could be claimed by anyone who registers it. Admins sign in with Google; app users are
-anonymous and carry no email, so they cannot match in principle.
+address could be claimed by anyone who registers it. Admins sign in with Google; app users sign in
+with a code to an inbox, and hold uids the server issues, so neither an address nor a uid can be
+claimed into the allowlist by registering it.
 
 **Privacy.** No `/admin` endpoint returns a transcript, translation, summary, title, tag, person,
 place, mood, chunk, or audio. Those are content, or model-generated descriptions of content. The rule
@@ -244,22 +245,74 @@ so a `tier` field living there could be self-granted from the app.
 
 **Why denormalized.** Listing users with recording counts by walking each user's subcollection is
 O(users × recordings) reads *per page load*. Counters are updated at write time instead
-(`create_recording`, `delete_recording`, `create_feedback`, the OTP paths, `merge_user`,
-`delete_user`), and totals come from Firestore aggregation queries. `max_duration_sec` is a
+(`create_recording`, `delete_recording`, `create_feedback`, the login paths, `delete_user`), and totals come from Firestore aggregation queries. `max_duration_sec` is a
 high-water mark — a maximum cannot be decremented without a rescan — so it means "longest ever
 recorded", which is also the more useful statistic.
 
 **Device identity.** The app generates a random install UUID on first launch, stored in a file and
 sent as `X-Install-Id` alongside `X-Platform` and `X-App-Version` on every request. Not a hardware
-id: it resets on reinstall and is deleted with the account. It survives sign-out, which is what lets
-the console show several accounts sharing one phone once account switching ships. A per-instance
-cache throttles the resulting write to roughly one per user per day.
+id: it resets on reinstall and is deleted with the account. It survives sign-out — which is what
+lets the console show several accounts sharing one phone, and what lets a login say "this account is
+already open on *this* device, so nothing needs taking over". A per-instance cache throttles the
+resulting write to roughly one per user per day.
 
-**Identity caveat.** A uid is not a stable account key. Signing in to an existing email merges that
-account onto the caller's current anonymous uid and deletes the old one, so uids churn; the verified
-email is the durable identifier and `previous_uids` preserves the lineage.
+**A uid is a stable account key.** It was not always: identity used to be the phone, a per-install
+anonymous Firebase uid, so signing in on a second device *moved* the account onto it — emptying the
+first, churning uids, and stranding audio under the old uid's storage prefix. See §8.
 
-## 8. Phased delivery
+## 8. Accounts and sessions
+
+**One email is one account, for good.** `POST /auth/otp/verify` resolves the verified address to a
+permanent server-issued uid (`usr_…`, `services/identity`) or creates one, and `POST /auth/session`
+mints a **Firebase custom token** for it. Every device that signs into an address authenticates as
+the same uid, so a second phone is a second window onto one account — nothing is copied, moved, or
+merged, and the account outlives every device that ever held it.
+
+This replaced an identity model where the account *was* the phone: a per-install anonymous uid, with
+signing in implemented as `merge_user`, which moved the whole account onto the calling device and
+deleted the old one. It worked, and it cost: the first device silently went blank, uids churned, and
+audio objects (keyed `users/{uid}/audio/…`) stayed behind under a uid that account deletion would
+never sweep. A permanent uid removes all three, and the merge machinery with them.
+
+**One device at a time.** An account holds exactly one `DeviceSession` (`sessions/{uid}`, server-only).
+Login is two steps because of the question in the middle:
+
+1. `POST /auth/otp/verify` checks the code and returns a short-lived single-use **ticket**, plus a
+   description of the device already signed in, if there is one.
+2. `POST /auth/session` spends the ticket. If another device holds the account it answers **409**
+   until the caller passes `takeover: true`.
+
+The split exists so the second device can show "your account is open on an Android phone, signed in
+2 hours ago" and let the person decide — by which point their code is already spent, so the ticket
+is what carries the verified state across the question. Signing someone out is never a side effect
+of a missing field.
+
+**Everything else is gated.** `require_live_session` sits on every app-facing router
+(`main.create_app`) and demands the live `X-Session-Id` beside the token. It reads the session
+document per request with no cache, deliberately: a cache here is a lie with a timer on it in both
+directions — the device that just took over would be refused until it expired, and the one that was
+signed out would keep working. A refusal is structured, not a bare 401, because it is the **only**
+moment the replaced device can be told anything:
+
+```json
+{"detail": {"code": "session_replaced", "device": "an Android phone", "signed_in_at": "…"}}
+```
+
+The app turns that into a full-screen explanation above the login form. `ApiClient` recognises it
+once, centrally, so no screen has to remember to. The WebSocket checks the same thing on connect and
+closes with **4403** rather than 4401, since "you were signed out" and "your login failed" are
+different sentences.
+
+**Signing out** (`POST /auth/logout`) clears the session and nothing else. That is what makes one
+phone usable by several people: the memories stay with the account, the next person signs in with
+their own address, and the app invalidates every account-scoped provider so not a single row of the
+previous account survives the switch.
+
+**What this costs.** Losing access to the inbox loses the account — there is no password fallback.
+And "one device" is exactly one: a phone and a tablet cannot both be signed in. Both are consequences
+of the same choice, and both are worth revisiting only by turning the single session into a list.
+
+## 9. Phased delivery
 
 - **Phase 0** — foundations: GCP/Firebase, Terraform, app shell, CI.
 - **Phase 1 (MVP)** — record + back-date, encrypted upload, ingestion, calendar, Talk-to-AI (text and live voice), auth.

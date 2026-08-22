@@ -228,7 +228,6 @@ class AdminUserDetail(BaseModel):
     note: str = ""
     tier_updated_at: datetime | None = None
     tier_updated_by: str = ""
-    previous_uids: list[str] = Field(default_factory=list)
     devices: list[DeviceInfo] = Field(default_factory=list)
     recent_recordings: list[AdminRecordingRow] = Field(default_factory=list)
 

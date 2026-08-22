@@ -73,7 +73,7 @@ class OtpService:
         self.settings = settings or get_settings()
 
     # -- issuing -----------------------------------------------------------
-    def request_code(self, repo, email: str, requester_uid: str) -> str:
+    def request_code(self, repo, email: str, requester_install_id: str = "") -> str:
         """Create and email a code. Returns it, for mock-mode inspection only."""
         email = normalize_email(email)
         existing = repo.get_otp(email)
@@ -90,7 +90,7 @@ class OtpService:
             expires_at=_now() + timedelta(seconds=self.settings.otp_ttl_seconds),
             sent_at=_now(),
             attempts=0,
-            requester_uid=requester_uid,
+            requester_install_id=requester_install_id,
         )
         repo.save_otp(challenge)
 

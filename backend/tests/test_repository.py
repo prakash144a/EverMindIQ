@@ -1,8 +1,8 @@
 """Repository behaviour that doesn't need a live Firestore.
 
 The Firestore implementation's network path can't run here, so the parts that
-CAN be pinned down are: the document mapping (pure functions), the merge
-semantics (exercised against the in-memory twin), and the fact that the two
+CAN be pinned down are: the document mapping (pure functions), the scoping and
+deletion rules (exercised against the in-memory twin), and the fact that the two
 implementations expose the same interface.
 """
 
@@ -16,7 +16,7 @@ import pytest
 from app.models.feedback import Feedback
 from app.models.journal import Journal
 from app.models.recording import Chunk, Recording, RecordingStatus
-from app.models.user import UserProfile, UserSettings, is_email, normalize_email
+from app.models.user import UserProfile, is_email, normalize_email
 from app.services.firestore import (
     FirestoreRepository,
     Repository,
@@ -148,85 +148,6 @@ def test_email_index_lookup_ignores_case():
     assert repo.uid_for_email("nobody@example.com") is None
 
 
-# -- merge --------------------------------------------------------------
-
-
-def test_merge_moves_recordings_and_rewrites_the_denormalized_uid():
-    repo = Repository()
-    repo.add_recording(make_recording("throwaway", "r1"))
-    repo.save_chunks("throwaway", "r1", [Chunk(id="c1", text="hi", embedding=[1.0])])
-    repo.add_recording(make_recording("account", "r2"))
-
-    moved = repo.merge_user("throwaway", "account")
-
-    assert moved["recordings"] == 1
-    assert {r.id for r in repo.list_recordings("account")} == {"r1", "r2"}
-    assert repo.list_recordings("throwaway") == []
-
-    moved_rec = repo.get_recording("account", "r1")
-    assert moved_rec is not None
-    assert moved_rec.uid == "account", "uid is stored on the document, not just the bucket"
-
-
-def test_merge_keeps_chunks_reachable_for_recall():
-    repo = Repository()
-    repo.add_recording(make_recording("throwaway", "r1"))
-    repo.save_chunks("throwaway", "r1", [Chunk(id="c1", text="lake", embedding=[1.0, 0.0])])
-
-    repo.merge_user("throwaway", "account")
-
-    hits = repo.vector_search("account", [1.0, 0.0], top_k=5)
-    assert [h.chunk.text for h in hits] == ["lake"]
-    assert repo.vector_search("throwaway", [1.0, 0.0], top_k=5) == []
-
-
-def test_merge_rewrites_feedback_uid_too():
-    repo = Repository()
-    repo.add_feedback(Feedback(id="f1", uid="throwaway", kind="problem", message="broke"))
-
-    repo.merge_user("throwaway", "account")
-
-    listed = repo.list_feedback("account")
-    assert [f.id for f in listed] == ["f1"]
-    assert listed[0].uid == "account"
-    assert repo.list_feedback("throwaway") == []
-
-
-def test_merge_keeps_the_accounts_own_settings():
-    repo = Repository()
-    repo.save_settings_doc("account", UserSettings(answer_language="ta"))
-    repo.save_settings_doc("throwaway", UserSettings(answer_language="fr"))
-
-    repo.merge_user("throwaway", "account")
-
-    assert repo.get_settings_doc("account").answer_language == "ta"
-
-
-def test_merging_a_uid_into_itself_is_a_no_op():
-    repo = Repository()
-    repo.add_recording(make_recording("alice", "r1"))
-
-    assert repo.merge_user("alice", "alice") == {
-        "recordings": 0,
-        "journals": 0,
-        "feedback": 0,
-        "insights": 0,
-        "feeds": 0,
-    }
-    assert len(repo.list_recordings("alice")) == 1
-
-
-def test_merge_leaves_other_users_untouched():
-    repo = Repository()
-    repo.add_recording(make_recording("throwaway", "r1"))
-    repo.add_recording(make_recording("bystander", "r9"))
-
-    repo.merge_user("throwaway", "account")
-
-    assert {r.id for r in repo.list_recordings("bystander")} == {"r9"}
-    assert repo.list_recordings("account")[0].id == "r1"
-
-
 # -- deletion -----------------------------------------------------------
 
 
@@ -264,25 +185,6 @@ def test_recorded_at_ordering_survives_iso_string_storage():
 
 
 # -- journals ------------------------------------------------------------
-
-
-def test_journals_survive_a_restore_still_holding_their_memories():
-    """Restore-after-reinstall must bring the filing back, not just the files.
-
-    `journal_id` is denormalized onto each recording, so a merge that moved the
-    recordings but left the journals behind would return every memory pointing
-    at a container that no longer exists — filed, and yet in nothing.
-    """
-    repo = Repository()
-    repo.save_journal("account", Journal(id="j1", name="Travel"))
-    repo.add_recording(make_recording("account", "r1", journal_id="j1"))
-
-    moved = repo.merge_user("account", "throwaway")
-
-    assert moved["journals"] == 1
-    assert [j.name for j in repo.list_journals("throwaway")] == ["Travel"]
-    assert repo.list_journals("account") == []
-    assert repo.list_recordings("throwaway", journal_id="j1")[0].id == "r1"
 
 
 def test_deleting_an_account_purges_its_journals():

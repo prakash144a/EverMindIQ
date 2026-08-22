@@ -32,6 +32,19 @@ from app.services.live import LiveSession, open_live_session
 router = APIRouter(tags=["live"])
 
 
+def _holds_the_session(uid: str, session_id: str | None) -> bool:
+    """Whether this socket belongs to the device currently signed in.
+
+    Checked here rather than as a router dependency because a dependency on a
+    WebSocket route can only refuse the handshake, and the app has to be able to
+    tell "signed out elsewhere" apart from "the network dropped".
+    """
+    from app.services.firestore import get_repository
+
+    held = get_repository().get_session(uid)
+    return held is not None and held.session_id == (session_id or "").strip()
+
+
 async def _resolve_ws_user(websocket: WebSocket, token: str | None) -> CurrentUser | None:
     settings = get_settings()
     if settings.effective_mock:
@@ -76,10 +89,20 @@ async def _forward(session: LiveSession, wire: _Wire) -> None:
 
 
 @router.websocket("/live")
-async def live(websocket: WebSocket, token: str | None = Query(default=None)) -> None:
+async def live(
+    websocket: WebSocket,
+    token: str | None = Query(default=None),
+    session: str | None = Query(default=None),
+) -> None:
     user = await _resolve_ws_user(websocket, token)
     if user is None:
         await websocket.close(code=4401)  # unauthorized
+        return
+    if not _holds_the_session(user.uid, session):
+        # A distinct code from 4401 so the app can say "you were signed out"
+        # rather than "your login failed" — the socket is the one place a
+        # takeover is likely to be noticed first, mid-conversation.
+        await websocket.close(code=4403)  # session is no longer the live one
         return
     await websocket.accept()
 

@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import '../core/config.dart';
 import '../core/device_identity.dart';
+import '../core/session_store.dart';
 import 'models.dart';
 
 /// Supplies a bearer token (a Firebase ID token in production), or null.
@@ -17,8 +18,12 @@ typedef TokenProvider = Future<String?> Function();
 /// stays valid). Falls back to [AppConfig.devUid] when no provider is given
 /// (local / mock-mode development).
 class ApiClient {
-  ApiClient({http.Client? client, String? baseUrl, TokenProvider? tokenProvider})
-      : _client = client ?? http.Client(),
+  ApiClient({
+    http.Client? client,
+    String? baseUrl,
+    TokenProvider? tokenProvider,
+    this.onSessionEnded,
+  })  : _client = client ?? http.Client(),
         _base = baseUrl ?? AppConfig.apiBaseUrl,
         _tokenProvider = tokenProvider;
 
@@ -26,12 +31,21 @@ class ApiClient {
   final String _base;
   final TokenProvider? _tokenProvider;
 
+  /// Told whenever the server says this device no longer holds the account, so
+  /// the app can return to the login screen from wherever it happens to be.
+  /// Wired once, here, rather than by every caller remembering to catch it.
+  final void Function(SessionEndedException)? onSessionEnded;
+
   Future<Map<String, String>> _headers({bool json = true}) async {
     final token = (await _tokenProvider?.call()) ?? AppConfig.devUid;
     final installId = DeviceIdentity.installId;
+    final sessionId = SessionStore.sessionId;
     return {
       'Authorization': 'Bearer $token',
       if (json) 'Content-Type': 'application/json',
+      // Which sign-in this is. A token alone is not enough: an account is held
+      // by one device at a time, and the server refuses anything else.
+      if (sessionId.isNotEmpty) 'X-Session-Id': sessionId,
       // Ride along on requests we are making anyway. A dedicated heartbeat call
       // would cost a round trip on every launch, and attaching this to the
       // record payload instead would tell us nothing about people who open the
@@ -46,7 +60,43 @@ class ApiClient {
         queryParameters: q?.map((k, v) => MapEntry(k, '$v')),
       );
 
-  Never _fail(http.Response r) => throw ApiException(r.statusCode, r.body);
+  /// Turn a failed response into the most specific exception we can.
+  ///
+  /// A 401 carrying a session code is not an ordinary failure: it is the app
+  /// being told, mid-request, that it has been signed out. Recognising it here
+  /// means every call gets that handling, including the ones written later.
+  Never _fail(http.Response r) {
+    if (r.statusCode == 401) {
+      final detail = _detail(r);
+      final code = asText(detail?['code']);
+      if (code == 'session_replaced' || code == 'signed_out') {
+        final ended = SessionEndedException(
+          code: code,
+          message: asText(detail?['message']),
+          replacedBy: code == 'session_replaced'
+              ? DeviceSessionInfo.fromJson(detail!.cast<String, dynamic>())
+              : null,
+        );
+        onSessionEnded?.call(ended);
+        throw ended;
+      }
+    }
+    throw ApiException(r.statusCode, r.body);
+  }
+
+  /// The `detail` object of an error body, when there is one to read.
+  static Map<String, dynamic>? _detail(http.Response r) {
+    try {
+      final body = jsonDecode(r.body);
+      if (body is Map && body['detail'] is Map) {
+        return (body['detail'] as Map).cast<String, dynamic>();
+      }
+    } catch (_) {
+      // A non-JSON error body (a proxy's HTML, say) is simply not a session
+      // message; fall through to the ordinary exception.
+    }
+    return null;
+  }
 
   // -- upload + create ---------------------------------------------------
 
@@ -172,7 +222,7 @@ class ApiClient {
     if (r.statusCode != 204) _fail(r);
   }
 
-  /// Verify the code. Creates the account, or restores an existing one.
+  /// Check the code. Returns a ticket, and whatever stands in the way of it.
   Future<VerifyResult> verifyOtp({
     required String email,
     required String code,
@@ -189,6 +239,36 @@ class ApiClient {
     );
     if (r.statusCode != 200) _fail(r);
     return VerifyResult.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  /// Spend a ticket for a session on this device.
+  ///
+  /// Throws [SessionInUseException] when the account is open elsewhere and
+  /// [takeover] was not given — the caller is expected to ask the person, not
+  /// to retry silently.
+  Future<SignInResult> claimSession(String ticket, {bool takeover = false}) async {
+    final r = await _client.post(
+      _u('/auth/session'),
+      headers: await _headers(),
+      body: jsonEncode({'ticket': ticket, 'takeover': takeover}),
+    );
+    if (r.statusCode == 409) {
+      final held = _detail(r)?['active_session'];
+      if (held is Map) {
+        throw SessionInUseException(
+          DeviceSessionInfo.fromJson(held.cast<String, dynamic>()),
+        );
+      }
+    }
+    if (r.statusCode != 200) _fail(r);
+    return SignInResult.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  /// End this device's hold on the account, so the next person gets their own.
+  Future<void> logout() async {
+    final r = await _client.post(_u('/auth/logout'), headers: await _headers());
+    // 401 means the session was already gone — the outcome we wanted.
+    if (r.statusCode != 204 && r.statusCode != 401) _fail(r);
   }
 
   /// Submit a problem report or suggestion. [diagnostics] carries captured error
@@ -369,4 +449,41 @@ class ApiException implements Exception {
   ApiException(this.statusCode, this.body);
   @override
   String toString() => 'ApiException($statusCode): $body';
+}
+
+/// This device is no longer the one signed in to the account.
+///
+/// Thrown from any call, because it can happen during any call: someone signed
+/// in on another phone, or signed out here. The app drops its session and shows
+/// [message] rather than surfacing an unexplained failure — being turned away
+/// mid-request is the *only* moment we get to say why.
+class SessionEndedException implements Exception {
+  /// "session_replaced" | "signed_out"
+  final String code;
+  final String message;
+
+  /// The device that took the account over, when that is what happened.
+  final DeviceSessionInfo? replacedBy;
+
+  SessionEndedException({
+    required this.code,
+    required this.message,
+    this.replacedBy,
+  });
+
+  bool get wasReplaced => code == 'session_replaced';
+
+  @override
+  String toString() => 'SessionEndedException($code): $message';
+}
+
+/// The account is open on another device, and taking it over was not asked for.
+///
+/// A question rather than an error: the login screen shows [activeSession] and
+/// calls back with `takeover: true` if the person says yes.
+class SessionInUseException implements Exception {
+  final DeviceSessionInfo activeSession;
+  SessionInUseException(this.activeSession);
+  @override
+  String toString() => 'SessionInUseException(${activeSession.device})';
 }

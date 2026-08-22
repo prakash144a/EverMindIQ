@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 from app.core.config import get_settings
 from app.services import stats as stats_ops
 from app.services.firestore import get_repository
-from tests.conftest import auth, set_tier
+from tests.conftest import auth, session_headers, set_tier, sign_in
 
 
 def _upload(client, uid: str) -> str:
@@ -198,14 +198,16 @@ def test_premium_sees_its_own_numbers(client):
     assert body["voice_session_max_sec"] == 3600
 
 
-def test_a_restored_account_does_not_get_a_second_quota(client, monkeypatch):
-    """Signing back in merges the old account onto the caller's uid. Summing the
-    two meters is the only direction that neither refunds nor double-charges."""
+def test_the_quota_follows_the_account_not_the_device(client, monkeypatch):
+    """One meter per account, wherever it is opened. It used to be per device,
+    because the account *was* the device — so a second phone started at zero."""
     monkeypatch.setattr(get_settings(), "recordings_per_month_free", 3)
-    _record(client, "old-account", 5.0)
-    _record(client, "new-session", 5.0)
+    phone = sign_in(client, "p@example.com", install_id="phone-a")
+    _record(client, phone["uid"], 5.0)
+    _record(client, phone["uid"], 5.0)
 
-    repo = get_repository()
-    repo.merge_user("old-account", "new-session")
+    tablet = sign_in(client, "p@example.com", install_id="tablet-b")
 
-    assert repo.get_user_stats("new-session").voice_recordings_this_month == 2
+    profile = client.get("/profile", headers=session_headers(tablet)).json()
+    assert profile["recordings_used_this_month"] == 2
+    assert profile["recordings_per_month"] == 3

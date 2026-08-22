@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 
 from app.models.recording import Recording, RecordingSource
-from app.models.user import MAX_TRAIL, UserStats, UserTier
+from app.models.user import UserStats, UserTier
 
 
 def _utcnow() -> datetime:
@@ -164,83 +164,6 @@ def apply_tier(
     if note is not None:
         stats.note = note
     return stats
-
-
-def _merge_voice_month(src: UserStats, dst: UserStats) -> None:
-    """Fold one account's monthly meter into another's, matching `merge_stats`.
-
-    Only the current month's counters add up; a stale one on either side reads as
-    zero. Restoring an account must not hand back a quota, and must not charge
-    the caller for a month they have already left behind.
-    """
-    key = month_key()
-    used = voice_recordings_in_month(src, None) + voice_recordings_in_month(dst, None)
-    dst.usage_month = key
-    dst.voice_recordings_this_month = used
-
-
-def merge_stats(src: UserStats, dst: UserStats) -> UserStats:
-    """Fold `src` into `dst`, matching `Repository.merge_user`'s direction.
-
-    Read the direction carefully. The only caller is the OTP restore path, which
-    calls ``merge_user(account_uid, session_uid)`` — so **src is the long-lived
-    real account** and **dst is the fresh anonymous session** the caller is
-    currently holding. Everything that represents account history therefore has
-    to be taken from `src`:
-
-    * `created_at` takes the earlier of the two, or every sign-in would reset
-      the account's signup date to today.
-    * `tier` upgrades and never downgrades, or every sign-in would silently
-      revoke a premium account.
-
-    Getting either backwards is invisible in normal use and corrupts the data
-    permanently, which is why it is spelled out here rather than inlined.
-    """
-    dst.recordings_count += src.recordings_count
-    _merge_voice_month(src, dst)
-    dst.total_duration_sec = round(dst.total_duration_sec + src.total_duration_sec, 3)
-    dst.max_duration_sec = max(dst.max_duration_sec, src.max_duration_sec)
-    dst.feedback_count += src.feedback_count
-
-    dst.created_at = min(dst.created_at, src.created_at)
-    dst.signup_day = dst.created_at.date()
-
-    if src.first_recorded_at and (
-        dst.first_recorded_at is None or src.first_recorded_at < dst.first_recorded_at
-    ):
-        dst.first_recorded_at = src.first_recorded_at
-    if src.last_recording_at and (
-        dst.last_recording_at is None or src.last_recording_at > dst.last_recording_at
-    ):
-        dst.last_recording_at = src.last_recording_at
-
-    if src.tier == UserTier.premium:
-        dst.tier = UserTier.premium
-        dst.tier_updated_at = dst.tier_updated_at or src.tier_updated_at
-        dst.tier_updated_by = dst.tier_updated_by or src.tier_updated_by
-    if src.note and not dst.note:
-        dst.note = src.note
-
-    # Lineage: the old uid is about to be deleted, so this is the only record
-    # that it ever existed.
-    trail = [*dst.previous_uids, *src.previous_uids, src.uid]
-    seen: list[str] = []
-    for uid in trail:
-        if uid and uid != dst.uid and uid not in seen:
-            seen.append(uid)
-    dst.previous_uids = seen[-MAX_TRAIL:]
-
-    # The device the caller is holding right now stays current; the account's
-    # older devices are kept behind it.
-    devices = [*src.install_ids, *dst.install_ids]
-    merged: list[str] = []
-    for device in devices:
-        if device and device not in merged:
-            merged.append(device)
-    dst.install_ids = merged[-MAX_TRAIL:]
-    if dst.install_id:
-        dst.touch_trail(dst.install_id)
-    return dst
 
 
 def recompute(stats: UserStats, recordings: list[Recording], feedback_count: int) -> UserStats:

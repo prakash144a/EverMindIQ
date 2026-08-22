@@ -168,7 +168,6 @@ def get_user(
         note=stats.note,
         tier_updated_at=stats.tier_updated_at,
         tier_updated_by=stats.tier_updated_by,
-        previous_uids=stats.previous_uids,
         devices=repo.list_devices_for_user(uid),
         recent_recordings=[AdminRecordingRow.of(r) for r in recordings],
     )
