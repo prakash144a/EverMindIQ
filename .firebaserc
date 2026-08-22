@@ -5,9 +5,6 @@
   "targets": {
     "voiceiq-505205": {
       "hosting": {
-        "site": [
-          "memoriesiq-site"
-        ],
         "admin": [
           "memoriesiq-admin"
         ]

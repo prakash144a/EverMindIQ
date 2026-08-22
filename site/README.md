@@ -70,7 +70,22 @@ them into real links only when the listings are live.
 
 ## Preview and deploy
 
+Hosted on **Azure Static Web Apps** (`memoriesiq-web`, resource group `rg-nativemindsai-web`),
+served at <https://memoriesiq.nativemindsai.com> — a subdomain of the company site, whose DNS zone
+lives in the same resource group. It sits beside the backend on GCP rather than with it because the
+marketing site shares a domain with the company site, not with the product.
+
+There is no CI for this folder: the app's own pipeline has nothing to say about a static page, and
+this deploys in seconds by hand.
+
 ```bash
-firebase emulators:start --only hosting     # from the repo root → http://127.0.0.1:5000
-firebase deploy --only hosting:site --project voiceiq-505205
+python -m http.server 5000 --directory site        # preview → http://127.0.0.1:5000
+
+TOKEN=$(az staticwebapp secrets list --name memoriesiq-web \n  --resource-group rg-nativemindsai-web --query "properties.apiKey" -o tsv)
+npx --yes @azure/static-web-apps-cli deploy ./site --deployment-token "$TOKEN" --env production
 ```
+
+`staticwebapp.config.json` carries the caching and security headers (CSS immutable for a year, HTML
+for five minutes — which is why the stylesheet filename is versioned). Canonical URLs in all three
+pages point at the live domain; if this ever moves to its own domain, they move with it or search
+engines will keep indexing the old address.
