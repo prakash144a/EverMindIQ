@@ -62,7 +62,7 @@ class _VoiceModeScreenState extends ConsumerState<VoiceModeScreen> {
 
   String get _label => switch (_voice.phase) {
         VoicePhase.connecting => 'Connecting…',
-        VoicePhase.listening => 'Listening…',
+        VoicePhase.listening => _voice.muted ? 'Muted' : 'Listening…',
         VoicePhase.thinking => 'Recalling…',
         VoicePhase.speaking => 'Speaking…',
         VoicePhase.unavailable => 'Voice unavailable',
@@ -82,6 +82,9 @@ class _VoiceModeScreenState extends ConsumerState<VoiceModeScreen> {
     if (_voice.phase == VoicePhase.thinking && _voice.heard.isNotEmpty) {
       return '“${_voice.heard}”';
     }
+    // Said last, so a live transcript still wins: the mic can be off while the
+    // answer is still playing, and the words are the more useful line then.
+    if (_voice.muted) return 'Microphone off. Tap the mic when you want to talk.';
     return 'Speak naturally — ask anything about your memories.';
   }
 
@@ -119,7 +122,11 @@ class _VoiceModeScreenState extends ConsumerState<VoiceModeScreen> {
                   ),
                 ),
                 const Spacer(),
-                _VoiceSplash(phase: _voice.phase, level: _voice.level),
+                _VoiceSplash(
+                  phase: _voice.phase,
+                  level: _voice.level,
+                  muted: _voice.muted,
+                ),
                 const SizedBox(height: Insets.xxl),
                 Text(
                   _label,
@@ -144,11 +151,33 @@ class _VoiceModeScreenState extends ConsumerState<VoiceModeScreen> {
                 const Spacer(),
                 Padding(
                   padding: const EdgeInsets.only(bottom: Insets.xxl),
-                  // Once the server has hung up there is nothing left to end, so
-                  // the red button becomes the way out rather than a second one.
-                  child: _EndButton(
-                    onTap: _end,
-                    ended: _voice.phase == VoicePhase.timeUp,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      // Nothing left to mute once the call is over, but the slot
+                      // stays so the end button does not jump sideways.
+                      Opacity(
+                        opacity: _voice.isLive ? 1 : 0,
+                        child: IgnorePointer(
+                          ignoring: !_voice.isLive,
+                          child: _MuteButton(
+                            muted: _voice.muted,
+                            onTap: _voice.toggleMute,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: Insets.xl),
+                      // Once the server has hung up there is nothing left to end,
+                      // so the red button becomes the way out rather than a
+                      // second one.
+                      _EndButton(
+                        onTap: _end,
+                        ended: _voice.phase == VoicePhase.timeUp,
+                      ),
+                      // Balances the mute button so the end button stays on the
+                      // screen's centre line, where a thumb expects it.
+                      const SizedBox(width: _MuteButton.size + Insets.xl),
+                    ],
                   ),
                 ),
               ],
@@ -163,14 +192,21 @@ class _VoiceModeScreenState extends ConsumerState<VoiceModeScreen> {
 /// Audio-reactive splash: concentric rings that swell with the mic level while
 /// listening, a steady glow while thinking/speaking.
 class _VoiceSplash extends StatelessWidget {
-  const _VoiceSplash({required this.phase, required this.level});
+  const _VoiceSplash({
+    required this.phase,
+    required this.level,
+    this.muted = false,
+  });
   final VoicePhase phase;
   final double level;
+  final bool muted;
 
   @override
   Widget build(BuildContext context) {
     final listening = phase == VoicePhase.listening;
-    final reactive = listening ? level : 0.35;
+    // A muted mic hears nothing, so the rings sit still rather than resting at
+    // the steady glow that means "working".
+    final reactive = listening ? level : (muted ? 0.0 : 0.35);
     const base = 150.0;
     return SizedBox(
       width: 300,
@@ -220,6 +256,7 @@ class _VoiceSplash extends StatelessWidget {
                 VoicePhase.speaking => Icons.volume_up_rounded,
                 VoicePhase.thinking => Icons.auto_awesome,
                 VoicePhase.unavailable => Icons.mic_off_rounded,
+                VoicePhase.listening when muted => Icons.mic_off_rounded,
                 // An hourglass, not a crossed-out mic: the call ended because it
                 // ran its course, which is a different thing from a failure.
                 VoicePhase.timeUp => Icons.hourglass_bottom_rounded,
@@ -266,6 +303,47 @@ class _RemainingClock extends StatelessWidget {
           fontSize: 12.5,
           fontWeight: FontWeight.w600,
           fontFeatures: const [FontFeature.tabularFigures()],
+        ),
+      ),
+    );
+  }
+}
+
+/// Holds the microphone back while the answer plays, so a noisy room does not
+/// count as talking over it. Sits beside the end button because the two are the
+/// only things there is to do during a call.
+class _MuteButton extends StatelessWidget {
+  const _MuteButton({required this.muted, required this.onTap});
+  final bool muted;
+  final VoidCallback onTap;
+
+  static const double size = 56;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      toggled: muted,
+      label: muted ? 'Unmute the microphone' : 'Mute the microphone',
+      child: Material(
+        color: muted
+            ? Colors.white.withValues(alpha: 0.92)
+            : Colors.white.withValues(alpha: 0.16),
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: SizedBox(
+            width: size,
+            height: size,
+            child: Icon(
+              muted ? Icons.mic_off_rounded : Icons.mic_rounded,
+              // Inverted while muted: at a glance, the filled button is the one
+              // that is doing something to the call.
+              color: muted ? AppColors.immersiveBottom : Colors.white,
+              size: 26,
+            ),
+          ),
         ),
       ),
     );

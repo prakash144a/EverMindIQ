@@ -91,6 +91,14 @@ class LiveVoiceSession extends ChangeNotifier {
   /// being sent, so it costs nothing extra.
   double level = 0;
 
+  /// Whether the microphone is being held back from the model.
+  ///
+  /// Echo cancellation stops the model hearing *itself*; it does nothing about a
+  /// television, a passing conversation, or someone thinking aloud, any of which
+  /// count as a barge-in and cut the answer off mid-sentence. This is the manual
+  /// override: hold the room back while the answer plays.
+  bool muted = false;
+
   /// What the model heard and what it is saying. Kept so a mis-heard question
   /// is diagnosable rather than merely disappointing.
   String heard = '';
@@ -252,8 +260,25 @@ class LiveVoiceSession extends ChangeNotifier {
     });
   }
 
+  /// Withhold the microphone, or give it back.
+  void setMuted(bool value) {
+    if (_closed || muted == value) return;
+    muted = value;
+    // Otherwise the splash stays frozen at whatever it was last hearing, as if
+    // the mic were still open.
+    if (muted) level = 0;
+    notifyListeners();
+  }
+
+  void toggleMute() => setMuted(!muted);
+
   void _onMicChunk(Uint8List pcm) {
     if (_closed || _channel == null) return;
+    // Muted samples are dropped here rather than by pausing the recorder: the
+    // audio never leaves the device either way, and keeping the stream up means
+    // unmuting is instant and cannot fail on a device that dislikes being
+    // restarted mid-call.
+    if (muted) return;
     _channel!.sink.add(pcm);
     final loudness = _rms(pcm);
     if ((loudness - level).abs() > 0.02) {

@@ -159,6 +159,17 @@ runs the same `pipeline.rag.retrieve` the text Recall screen uses, and whatever 
 sent to the client as citations. The same socket still carries the text protocol, so ending a call
 does not end the chat. Keys never leave the server.
 
+A conversation is many turns on one session, and the SDK does not hand it over that way: its
+`session.receive()` generator covers a **single** model turn and returns at `turn_complete`.
+Iterating it once answers the first question and then goes silent with the microphone still
+streaming up, so the bridge re-enters it in a loop and treats a turn that yields nothing at all as
+the socket having gone. The two directions run as separate tasks and the first one to finish ends
+the call, rather than leaving the survivor holding an open (billing) session. On the client, a
+**mute** button withholds the microphone during an answer: echo cancellation stops the model hearing
+itself, but not a television or a passing conversation, and either counts as a barge-in that cuts
+the answer off. Muted frames are dropped on the device rather than pausing the recorder, so
+unmuting is instant.
+
 ## 6. Security
 
 TLS everywhere; Firebase ID token verified per request; App Check. Audio in GCS with CMEK, no public

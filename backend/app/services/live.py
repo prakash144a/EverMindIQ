@@ -26,6 +26,7 @@ end in tests without credentials.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import math
 import struct
 from collections.abc import AsyncIterator
@@ -317,14 +318,29 @@ class GeminiLiveSession(_QueuedSession):  # pragma: no cover - real path
             ) as session:
                 self._emit("ready", audio=True, limit_sec=self.max_seconds)
                 self._arm_deadline()
-                await asyncio.gather(
-                    self._pump_up(session, types),
-                    self._pump_down(session, types),
-                )
+                await self._converse(session, types)
         except Exception as exc:  # the socket is the feature; never fail silently
             self._emit("error", message=f"live session ended: {exc}")
         finally:
             self._events.put_nowait(None)
+
+    async def _converse(self, session, types) -> None:
+        """Run both directions until either one ends the call.
+
+        Not `gather`: the two halves stop for different reasons, and whichever
+        stops first means the conversation is over. Waiting for both instead
+        leaves the survivor holding an open Gemini session — the microphone
+        still streaming up into a call whose answers no longer come back.
+        """
+        up = asyncio.create_task(self._pump_up(session, types))
+        down = asyncio.create_task(self._pump_down(session, types))
+        done, pending = await asyncio.wait({up, down}, return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        for task in done:
+            task.result()  # a pump that died of an exception says so, not silently
 
     async def _pump_up(self, session, types) -> None:
         """Client -> Gemini, until the client hangs up."""
@@ -346,31 +362,49 @@ class GeminiLiveSession(_QueuedSession):  # pragma: no cover - real path
                 )
 
     async def _pump_down(self, session, types) -> None:
-        """Gemini -> client, translating the SDK's message shapes to our frames."""
-        async for message in session.receive():
-            data = getattr(message, "data", None)
-            if data:
-                self._emit("audio", data)
+        """Gemini -> client, for the whole conversation rather than one turn.
 
-            content = getattr(message, "server_content", None)
-            if content is not None:
-                heard = getattr(content, "input_transcription", None)
-                if heard is not None and getattr(heard, "text", ""):
-                    self._emit("input_transcript", text=heard.text)
-                spoken = getattr(content, "output_transcription", None)
-                if spoken is not None and getattr(spoken, "text", ""):
-                    self._emit("output_transcript", text=spoken.text)
-                if getattr(content, "interrupted", False):
-                    # The user talked over the answer: tell the client to drop
-                    # whatever it has buffered, or it keeps speaking a reply
-                    # the model has already abandoned.
-                    self._emit("interrupted")
-                if getattr(content, "turn_complete", False):
-                    self._emit("turn_complete")
+        `session.receive()` is scoped to a single model turn: the SDK's generator
+        returns as soon as the server says the turn is complete. Iterating it once
+        answers the first question and then goes quiet forever, with the
+        microphone still streaming up into a call that has stopped replying.
+        Re-entering it is what makes the conversation continuous.
+        """
+        while True:
+            spoke = False
+            async for message in session.receive():
+                spoke = True
+                await self._forward(session, types, message)
+            if not spoke:
+                # A turn that yielded nothing at all is the socket having gone,
+                # not a model with nothing to say. Looping on it would spin.
+                return
 
-            tool_call = getattr(message, "tool_call", None)
-            if tool_call is not None:
-                await self._answer_tool_call(session, types, tool_call)
+    async def _forward(self, session, types, message) -> None:
+        """One SDK message, translated into the frames the client waits on."""
+        data = getattr(message, "data", None)
+        if data:
+            self._emit("audio", data)
+
+        content = getattr(message, "server_content", None)
+        if content is not None:
+            heard = getattr(content, "input_transcription", None)
+            if heard is not None and getattr(heard, "text", ""):
+                self._emit("input_transcript", text=heard.text)
+            spoken = getattr(content, "output_transcription", None)
+            if spoken is not None and getattr(spoken, "text", ""):
+                self._emit("output_transcript", text=spoken.text)
+            if getattr(content, "interrupted", False):
+                # The user talked over the answer: tell the client to drop
+                # whatever it has buffered, or it keeps speaking a reply
+                # the model has already abandoned.
+                self._emit("interrupted")
+            if getattr(content, "turn_complete", False):
+                self._emit("turn_complete")
+
+        tool_call = getattr(message, "tool_call", None)
+        if tool_call is not None:
+            await self._answer_tool_call(session, types, tool_call)
 
     async def _answer_tool_call(self, session, types, tool_call) -> None:
         responses = []
