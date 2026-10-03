@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:audioplayers/audioplayers.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'providers.dart';
@@ -93,10 +92,10 @@ class AudioPlaybackController extends Notifier<PlaybackState> {
     state = state.copyWith(recordingId: recordingId, playing: false, loading: true);
 
     try {
-      final bytes = await ref.read(apiClientProvider).fetchAudioBytes(recordingId);
+      final audio = await ref.read(apiClientProvider).fetchAudio(recordingId);
       if (_requestedId != recordingId) return; // superseded by a later tap
-      if (bytes.isEmpty) throw Exception('no audio yet');
-      await _player.play(BytesSource(bytes, mimeType: kIsWeb ? 'audio/webm' : 'audio/mp4'));
+      if (audio.isEmpty) throw Exception('no audio yet');
+      await _player.play(BytesSource(audio.bytes, mimeType: audio.playbackMimeType));
       if (_requestedId != recordingId) return;
       _loadedId = recordingId;
       state = state.copyWith(loading: false);

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 
 import '../core/config.dart';
@@ -376,12 +377,19 @@ class ApiClient {
     if (r.statusCode != 204) _fail(r);
   }
 
-  /// Raw audio bytes for a recording, for in-app playback. Served behind auth by the backend.
-  Future<Uint8List> fetchAudioBytes(String recordingId) async {
+  /// Raw audio for a recording, for in-app playback. Served behind auth by the
+  /// backend.
+  ///
+  /// The content type comes back with it because the format is the
+  /// *recording's*, not the listening device's: a memory spoken into a browser
+  /// is webm and one spoken into a phone is m4a, and either can be played on
+  /// either. The server already derives the right type from what it stored, so
+  /// the only thing needed here is to stop throwing it away.
+  Future<Audio> fetchAudio(String recordingId) async {
     final r = await _client.get(_u('/recordings/$recordingId/audio'),
         headers: await _headers(json: false));
     if (r.statusCode != 200) _fail(r);
-    return r.bodyBytes;
+    return Audio(bytes: r.bodyBytes, contentType: r.headers['content-type'] ?? '');
   }
 
   /// Ask a question. [journalId] is three-state, as on the server: null lets the
@@ -441,6 +449,43 @@ class ApiClient {
 
   static String _ymd(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+}
+
+/// Downloaded audio, with the format the server says it is in.
+///
+/// The pair travels together because neither half is any use alone: a player
+/// handed bytes without a type has to guess, and the guess that was here before
+/// — "whatever this platform records in" — is wrong exactly when it matters,
+/// which is a memory captured on one device and played on another.
+class Audio {
+  const Audio({required this.bytes, required this.contentType});
+
+  final Uint8List bytes;
+
+  /// As served, e.g. `audio/webm` or `audio/mp4`. Empty if the response said
+  /// nothing at all.
+  final String contentType;
+
+  bool get isEmpty => bytes.isEmpty;
+
+  /// What to tell the player this is.
+  ///
+  /// The server's own answer, derived from the file it stored, whenever it gave
+  /// one. It has to be: a memory spoken into the web app is webm and one spoken
+  /// into a phone is m4a, they live in one account, and either can be opened
+  /// from either place. Deciding by the *listening* platform — as this did
+  /// before there was a web app to record from — labels every web recording
+  /// `audio/mp4` the moment a phone plays it, and it will not play.
+  ///
+  /// The fallback covers a response that named no type, or named something that
+  /// is not audio at all (a proxy's error page). It guesses what this platform
+  /// would itself have recorded, which is the best available guess for audio
+  /// with no other provenance.
+  String get playbackMimeType {
+    final served = contentType.split(';').first.trim().toLowerCase();
+    if (served.startsWith('audio/')) return served;
+    return kIsWeb ? 'audio/webm' : 'audio/mp4';
+  }
 }
 
 class ApiException implements Exception {

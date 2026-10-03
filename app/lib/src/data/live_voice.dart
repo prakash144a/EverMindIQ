@@ -4,12 +4,12 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter_pcm_sound/flutter_pcm_sound.dart';
 import 'package:record/record.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../core/config.dart';
 import '../core/session_store.dart';
+import 'pcm_player.dart';
 
 /// A spoken conversation with the memory AI, streamed to and from Gemini Live.
 ///
@@ -19,6 +19,11 @@ import '../core/session_store.dart';
 /// they were hearing and answering in English for people whose memories are in
 /// Tamil or Hindi. One model on the other end of one socket hears and speaks
 /// them natively.
+///
+/// Both halves work in a browser too, which is why neither touches a platform
+/// API directly: `record` resamples the microphone to 16 kHz through an
+/// AudioWorklet, and [PcmPlayer] is the speaker, backed by the plugin natively
+/// and by Web Audio on the web.
 ///
 /// Binary frames are audio, JSON frames are control — the same rule the backend
 /// applies in the other direction.
@@ -49,8 +54,8 @@ const int _micSampleRate = 16000;
 const int _voiceSampleRate = 24000;
 
 /// How much of the model's voice we hand to the speaker at a time. The rest
-/// waits in the play queue, where we can still throw it away: the plugin has no
-/// way to flush what it has already accepted, so anything fed early is audio we
+/// waits in the play queue, where we can still throw it away: no [PcmPlayer]
+/// can flush what it has already accepted, so anything fed early is audio we
 /// are committed to playing through a barge-in.
 const int _maxChunksAhead = 4;
 
@@ -72,6 +77,7 @@ class LiveVoiceSession extends ChangeNotifier {
   final String? journalId;
 
   final AudioRecorder _recorder = AudioRecorder();
+  final PcmPlayer _speaker = PcmPlayer();
   final Queue<Uint8List> _playQueue = Queue<Uint8List>();
 
   WebSocketChannel? _channel;
@@ -115,7 +121,7 @@ class LiveVoiceSession extends ChangeNotifier {
   bool _closed = false;
   bool _audioReady = false;
   bool _speakerIdle = true;
-  bool _pcmSetUp = false;
+  bool _speakerOpen = false;
 
   Future<void> start() async {
     if (!await _recorder.hasPermission()) {
@@ -229,14 +235,12 @@ class LiveVoiceSession extends ChangeNotifier {
 
   Future<void> _openAudio() async {
     try {
-      await FlutterPcmSound.setLogLevel(LogLevel.error);
-      await FlutterPcmSound.setup(
+      _speaker.onNeedsMore(_feed);
+      await _speaker.setup(
         sampleRate: _voiceSampleRate,
-        channelCount: 1,
+        feedThresholdFrames: _feedThresholdFrames,
       );
-      await FlutterPcmSound.setFeedThreshold(_feedThresholdFrames);
-      FlutterPcmSound.setFeedCallback(_feed);
-      _pcmSetUp = true;
+      _speakerOpen = true;
 
       final mic = await _recorder.startStream(const RecordConfig(
         encoder: AudioEncoder.pcm16bits,
@@ -301,14 +305,10 @@ class LiveVoiceSession extends ChangeNotifier {
 
   /// Hand the speaker more of the model's voice, shallowly.
   void _feed(int remainingFrames) {
-    if (_closed || !_pcmSetUp) return;
+    if (_closed || !_speakerOpen) return;
     var fed = 0;
     while (_playQueue.isNotEmpty && fed < _maxChunksAhead) {
-      final chunk = _playQueue.removeFirst();
-      // The plugin sends `bytes.buffer` wholesale, ignoring any view offset, so
-      // the ByteData must own its backing store exactly. A copy guarantees it.
-      final owned = Uint8List.fromList(chunk);
-      unawaited(FlutterPcmSound.feed(PcmArrayInt16(bytes: owned.buffer.asByteData())));
+      unawaited(_speaker.feed(_playQueue.removeFirst()));
       fed++;
     }
     if (fed == 0 && remainingFrames == 0) {
@@ -365,12 +365,9 @@ class LiveVoiceSession extends ChangeNotifier {
     try {
       if (await _recorder.isRecording()) await _recorder.stop();
     } catch (_) {/* best effort */}
-    if (_pcmSetUp) {
-      FlutterPcmSound.setFeedCallback(null);
-      try {
-        await FlutterPcmSound.release();
-      } catch (_) {/* best effort */}
-      _pcmSetUp = false;
+    if (_speakerOpen) {
+      _speakerOpen = false;
+      await _speaker.release();
     }
     await _socketSub?.cancel();
     _socketSub = null;

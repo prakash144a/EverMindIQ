@@ -22,6 +22,12 @@ dependencies:
   flutter_pcm_sound: ^3.3.3
   firebase_core: ^3.0.0
   firebase_auth: ^5.0.0
+  # Browser APIs the web build reaches for directly: `localStorage`, so a tab
+  # keeps its session across a refresh, and Web Audio, which plays back the
+  # voice of a spoken recall (flutter_pcm_sound is Android/iOS/macOS only).
+  # Already in the tree as a transitive dependency of record_web; named here
+  # because we import it.
+  web: ^1.1.0
 
 dev_dependencies:
   flutter_test:

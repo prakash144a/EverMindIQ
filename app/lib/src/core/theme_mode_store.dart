@@ -1,7 +1,6 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
+
+import 'local_store.dart';
 
 /// The chosen light/dark mode, cached on the device.
 ///
@@ -11,12 +10,12 @@ import 'package:path_provider/path_provider.dart';
 /// mode instead of flashing the OS default and correcting itself a moment
 /// later. The server's copy is a slower second opinion, applied when it lands.
 ///
-/// Follows [DeviceIdentity]: a plain file via `path_provider`, resolved once at
+/// Follows [DeviceIdentity]: one small value in [LocalStore], resolved once at
 /// startup, read synchronously afterwards.
 class ThemeModeStore {
   ThemeModeStore._();
 
-  static const _fileName = 'theme_mode';
+  static const _key = 'theme_mode';
 
   static ThemeMode _cached = ThemeMode.system;
 
@@ -24,17 +23,11 @@ class ThemeModeStore {
   /// before `runApp`; `system` before that, which is also the default.
   static ThemeMode get cached => _cached;
 
+  /// Unreadable storage leaves `system`, which is a reasonable answer and the
+  /// default anyway — never a reason to hold up startup.
   static Future<ThemeMode> load() async {
-    try {
-      final file = File('${(await getApplicationSupportDirectory()).path}/$_fileName');
-      if (await file.exists()) {
-        return _cached = decode((await file.readAsString()).trim());
-      }
-    } catch (_) {
-      // No readable storage. `system` is a reasonable answer, and it is the
-      // default anyway — never a reason to hold up startup.
-    }
-    return _cached;
+    final stored = await LocalStore.read(_key);
+    return _cached = stored == null ? _cached : decode(stored);
   }
 
   /// Remember the choice for the next launch. Applying it is the caller's job;
@@ -42,14 +35,10 @@ class ThemeModeStore {
   /// worth less than a crash.
   static Future<void> save(ThemeMode mode) async {
     _cached = mode;
-    try {
-      final file = File('${(await getApplicationSupportDirectory()).path}/$_fileName');
-      await file.create(recursive: true);
-      await file.writeAsString(encode(mode), flush: true);
-    } catch (_) {
-      // The in-memory value still applies for this session; only the next
-      // launch loses it, and the server copy usually restores it anyway.
-    }
+    // Best effort, as everywhere in [LocalStore]: the in-memory value still
+    // applies for this session, only the next launch loses it, and the server
+    // copy usually restores it anyway.
+    await LocalStore.write(_key, encode(mode));
   }
 
   static String encode(ThemeMode mode) => switch (mode) {
