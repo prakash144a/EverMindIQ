@@ -45,6 +45,35 @@ flutter run --dart-define=API_BASE_URL=http://localhost:8000 --dart-define=DEV_U
 `DEV_UID` is a placeholder auth token used until Firebase Auth is wired (see Roadmap). The backend in
 mock mode treats it as the user id.
 
+## The web app
+
+The same Flutter code, built for the browser and served at <https://app.memoriesiq.nativemindsai.com>
+from **Azure Static Web Apps** (`memoriesiq-app`, resource group `rg-nativemindsai-web`) — beside the
+marketing site, which is its own Static Web App at the parent domain. The backend stays on GCP; the
+web origin is named in `cors_origins` (`infra/terraform.tfvars`) so the browser may call it.
+
+A browser signs into the account's **web** session slot, so it runs alongside the phone rather than
+signing it out (`docs/architecture.md`, "One device per surface").
+
+```bash
+cd app
+flutter build web --release   --dart-define=API_BASE_URL=https://voiceiq-api-fv2se2zeza-uc.a.run.app   --dart-define=APP_VERSION=web
+
+TOKEN=$(az staticwebapp secrets list --name memoriesiq-app   --resource-group rg-nativemindsai-web --query "properties.apiKey" -o tsv)
+npx --yes @azure/static-web-apps-cli deploy ./build/web --deployment-token "$TOKEN" --env production
+```
+
+`web/staticwebapp.config.json` is copied into the build and carries the headers. Two things in it
+are load-bearing:
+
+- `Permissions-Policy: microphone=(self)`. The marketing site sends `microphone=()`, which switches
+  the microphone off outright — copy that config here and recording silently stops working.
+- `Cache-Control: no-cache` on everything but `canvaskit/` and `icons/`. Flutter's entry points
+  (`main.dart.js`, `flutter_bootstrap.js`, the asset manifests) keep the same names across builds,
+  so caching them hard leaves people on an old build after a deploy.
+
+Never pass `MOCK_AUTH=true` to a build that is deployed: it is for the local mock backend only.
+
 ## Structure
 
 ```

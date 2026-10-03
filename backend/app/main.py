@@ -68,7 +68,9 @@ def create_app() -> FastAPI:
     # site cannot make an authenticated request just because its origin is
     # allowed — it has no token to send. CORS is defence in depth; `require_admin`
     # is the actual boundary for /admin. The native app ignores CORS entirely,
-    # so tightening this costs mobile nothing.
+    # so tightening this costs mobile nothing — but the Flutter *web* build is a
+    # browser like any other, and its origin has to be listed here to call the
+    # API at all.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,

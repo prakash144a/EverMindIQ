@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json.schemastore.org/staticwebapp.config.json",
+  "navigationFallback": {
+    "rewrite": "/index.html",
+    "exclude": [
+      "/assets/*",
+      "/canvaskit/*",
+      "/icons/*",
+      "/*.{js,json,png,ico,wasm,map,css}"
+    ]
+  },
+  "routes": [
+    {
+      "route": "/canvaskit/*",
+      "headers": {
+        "Cache-Control": "public, max-age=604800"
+      }
+    },
+    {
+      "route": "/icons/*",
+      "headers": {
+        "Cache-Control": "public, max-age=604800"
+      }
+    },
+    {
+      "route": "/*",
+      "headers": {
+        "Cache-Control": "no-cache"
+      }
+    }
+  ],
+  "globalHeaders": {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "SAMEORIGIN",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "geolocation=(), camera=(), microphone=(self)",
+    "X-Robots-Tag": "noindex, nofollow"
+  },
+  "mimeTypes": {
+    ".wasm": "application/wasm",
+    ".json": "application/json"
+  }
+}

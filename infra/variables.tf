@@ -63,7 +63,7 @@ variable "admin_emails" {
 variable "cors_origins" {
   type        = string
   default     = "*"
-  description = "Comma-separated browser origins allowed to call the API. The mobile app ignores CORS; this only gates the web console."
+  description = "Comma-separated browser origins allowed to call the API. The mobile app ignores CORS; this gates the admin console and the Flutter web build."
 }
 
 variable "monthly_budget_usd" {
