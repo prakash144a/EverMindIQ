@@ -4,10 +4,11 @@ In real mode the bearer token is verified with the Firebase Admin SDK. In mock m
 treated as the uid (or an ``X-Debug-Uid`` header is honored) so the API is exercisable in tests and
 local dev without real credentials.
 
-A valid token is only half of it. An account may be held by **one device at a time**, so app-facing
-requests also carry the session id issued at login and are refused when it is not the live one —
-see [require_live_session]. That refusal is the only way a phone that has been signed out elsewhere
-ever finds out, so it says which device replaced it and when, rather than a bare 401.
+A valid token is only half of it. An account may be held by **one device per surface** — one phone
+and one browser — so app-facing requests also carry the session id issued at login and are refused
+when it is not one of the live ones; see [require_live_session]. That refusal is the only way a
+phone that has been signed out elsewhere ever finds out, so it says which device replaced it and
+when, rather than a bare 401.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import Settings, get_settings
+from app.models.user import surface_for
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -88,23 +90,33 @@ async def get_current_user(
 async def require_live_session(
     user: CurrentUser = Depends(get_current_user),
     x_session_id: str | None = Header(default=None),
+    x_platform: str | None = Header(default=None),
 ) -> CurrentUser:
-    """Gate for everything the app does: a valid token *and* the live session.
+    """Gate for everything the app does: a valid token *and* a live session.
 
     Read straight from the repository on every request, with no cache. A cache
     here would be a lie with a timer on it in both directions — the device that
     just took the account over would be refused until its entry expired, and the
     one that was signed out would keep working until then. Taking over is meant
     to be immediate, and this is one small keyed read.
+
+    The session id is matched against *every* surface rather than only the one
+    the caller claims to be, because the header naming it is the caller's own
+    and proves nothing. A session id is unguessable and belongs to exactly one
+    slot; finding it is what authorizes the request, and which slot it turned up
+    in is only ever used to explain a refusal.
     """
     from app.services.firestore import get_repository
 
-    held = get_repository().get_session(user.uid)
-    if held is not None and held.session_id == (x_session_id or "").strip():
+    slots = get_repository().get_sessions(user.uid)
+    presented = (x_session_id or "").strip()
+    if presented and any(held.session_id == presented for held in slots.values()):
         return user
+    # Refused: say what replaced this caller, which is whatever now holds the
+    # surface it was signing in from.
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail=_ended_session_detail(held),
+        detail=_ended_session_detail(slots.get(surface_for(x_platform or ""))),
     )
 
 

@@ -29,6 +29,7 @@ from app.models.journal import Journal
 from app.models.memory import MemoryFeed
 from app.models.recording import Chunk, Recording, RecordingStatus
 from app.models.user import (
+    SURFACES,
     DeviceSession,
     LoginTicket,
     OtpChallenge,
@@ -75,8 +76,8 @@ class Repository:
         self._email_index: dict[str, str] = {}
         # normalized email -> pending OTP
         self._otps: dict[str, OtpChallenge] = {}
-        # uid -> the one device currently signed in to that account
-        self._sessions: dict[str, DeviceSession] = {}
+        # uid -> {surface -> the device holding that surface}
+        self._sessions: dict[str, dict[str, DeviceSession]] = {}
         # ticket -> a verified code waiting to be exchanged for a session
         self._tickets: dict[str, LoginTicket] = {}
         # -- admin plane (mirrors the top-level Firestore collections) ------
@@ -135,19 +136,38 @@ class Repository:
             self._otps.pop(normalize_email(email), None)
 
     # -- sessions ----------------------------------------------------------
-    # One per account, replaced on sign-in and removed on sign-out. Read on
-    # every authenticated request, which is why it is a single small document
-    # rather than a collection to scan.
-    def get_session(self, uid: str) -> DeviceSession | None:
+    # One per surface per account — a phone and a browser — each replaced on
+    # sign-in and removed on sign-out. Read on every authenticated request,
+    # which is why both slots live in a single small document rather than a
+    # collection to scan.
+    def get_sessions(self, uid: str) -> dict[str, DeviceSession]:
         with self._lock:
-            return self._sessions.get(uid)
+            return dict(self._sessions.get(uid, {}))
+
+    def get_session(self, uid: str, surface: str) -> DeviceSession | None:
+        with self._lock:
+            return self._sessions.get(uid, {}).get(surface)
 
     def save_session(self, uid: str, session: DeviceSession) -> DeviceSession:
+        """Put `session` in the slot its own platform names.
+
+        The surface is derived rather than passed so a caller cannot file a
+        browser under the phone's slot and sign a phone out by accident.
+        """
         with self._lock:
-            self._sessions[uid] = session
+            self._sessions.setdefault(uid, {})[session.surface] = session
             return session
 
-    def clear_session(self, uid: str) -> None:
+    def clear_session(self, uid: str, surface: str) -> None:
+        with self._lock:
+            slots = self._sessions.get(uid)
+            if slots is None:
+                return
+            slots.pop(surface, None)
+            if not slots:
+                self._sessions.pop(uid, None)
+
+    def clear_sessions(self, uid: str) -> None:
         with self._lock:
             self._sessions.pop(uid, None)
 
@@ -628,7 +648,8 @@ class Repository:
             profile = self._profiles.pop(uid, None)
             if profile and profile.email:
                 self._email_index.pop(normalize_email(profile.email), None)
-            # Whoever is holding this account is holding nothing now.
+            # Whoever is holding this account, on either surface, is holding
+            # nothing now.
             self._sessions.pop(uid, None)
             # The install id is stored here and on the device link, and nowhere
             # else — deleting both is what makes it genuinely deletable.
@@ -667,6 +688,26 @@ SORTABLE = (
     "max_duration_sec",
     "email",
 )
+
+
+def _sessions_from_document(data: dict | None) -> dict[str, DeviceSession]:
+    """Read a ``sessions/{uid}`` document, whichever shape it is in.
+
+    Accounts signed in before surfaces existed have a bare session stored at the
+    top level of the document. Those are read as the slot their platform names,
+    so the deploy that introduces this does not sign every phone in the field
+    out — the next sign-in or sign-out rewrites them in the new shape.
+    """
+    if not data:
+        return {}
+    if "session_id" in data:  # pre-surfaces: one session, no slots
+        legacy = DeviceSession(**data)
+        return {legacy.surface: legacy}
+    return {
+        surface: DeviceSession(**held)
+        for surface, held in data.items()
+        if surface in SURFACES and isinstance(held, dict)
+    }
 
 
 def _sort_key(stats: UserStats, sort: str):
@@ -880,15 +921,47 @@ class FirestoreRepository:
     # In their own top-level collection rather than on ``users/{uid}``: that
     # document is client-writable by its owner (see `firestore.rules`), and a
     # session someone can rewrite from the app is not a session.
-    def get_session(self, uid: str) -> DeviceSession | None:
+    #
+    # ``sessions/{uid}`` is a map of surface -> session, so one read answers for
+    # the phone and the browser at once.
+    def get_sessions(self, uid: str) -> dict[str, DeviceSession]:
         snap = self.db.collection("sessions").document(uid).get()
-        return DeviceSession(**snap.to_dict()) if snap.exists else None
+        return _sessions_from_document(snap.to_dict() if snap.exists else None)
+
+    def get_session(self, uid: str, surface: str) -> DeviceSession | None:
+        return self.get_sessions(uid).get(surface)
 
     def save_session(self, uid: str, session: DeviceSession) -> DeviceSession:
-        self.db.collection("sessions").document(uid).set(session.model_dump(mode="json"))
+        """Write one slot, leaving the other surface's session untouched.
+
+        Read, replace the one slot, and write the whole map back — not a merging
+        write. A merge would leave a pre-surfaces document's top-level
+        ``session_id`` in place beside the new slot, and that document would go
+        on being read as the legacy shape, hiding the session just written. The
+        read normalizes it, so the first sign-in after the deploy migrates it.
+        """
+        slots = self.get_sessions(uid)
+        slots[session.surface] = session
+        self.db.collection("sessions").document(uid).set(
+            {name: held.model_dump(mode="json") for name, held in slots.items()}
+        )
         return session
 
-    def clear_session(self, uid: str) -> None:
+    def clear_session(self, uid: str, surface: str) -> None:
+        """Sign one surface out. Rewritten rather than field-deleted so a legacy
+        single-session document is normalized on the way past."""
+        remaining = {
+            name: held.model_dump(mode="json")
+            for name, held in self.get_sessions(uid).items()
+            if name != surface
+        }
+        doc = self.db.collection("sessions").document(uid)
+        if remaining:
+            doc.set(remaining)
+        else:
+            doc.delete()
+
+    def clear_sessions(self, uid: str) -> None:
         self.db.collection("sessions").document(uid).delete()
 
     # -- login tickets -----------------------------------------------------
@@ -1439,8 +1512,9 @@ class FirestoreRepository:
                 snap.reference.delete()
         if profile and profile.email:
             self.db.collection("emailIndex").document(normalize_email(profile.email)).delete()
-        # Whoever is holding this account is holding nothing now.
-        self.clear_session(uid)
+        # Whoever is holding this account, on either surface, is holding
+        # nothing now.
+        self.clear_sessions(uid)
         # The install id lives on the stats document and the device link, and
         # nowhere else — removing both is what makes it genuinely deletable.
         stats = self.get_user_stats(uid)

@@ -1,13 +1,19 @@
-"""Logging in, logging out, and the one device that may hold an account.
+"""Logging in, logging out, and the devices that may hold an account.
+
+An account may be open in two places at once — one phone and one browser. Those
+are its *surfaces*, and each holds its own session: recording a memory on a
+laptop does not sign the phone in someone's pocket out, and the memory shows up
+on both because neither device is where the memories live. Within a surface the
+rule is still one at a time, so a second phone displaces the first.
 
 Login is a code to an inbox, in two steps:
 
 1. ``POST /auth/otp/request`` emails a code. ``POST /auth/otp/verify`` checks it
-   and hands back a short-lived **ticket** — plus, if someone else is already
-   signed in, a description of the device holding the account.
+   and hands back a short-lived **ticket** — plus, if another device is already
+   signed in *on this surface*, a description of it.
 2. ``POST /auth/session`` spends the ticket for a Firebase custom token and a
-   session id. If another device holds the account it refuses with 409 until the
-   caller says ``takeover``.
+   session id. If another device holds that surface it refuses with 409 until
+   the caller says ``takeover``.
 
 The split exists for that refusal. A person signing in on a new phone has to be
 able to see "this account is open on an Android phone" and *decide*, and by the
@@ -39,6 +45,7 @@ from app.models.user import (
     UserProfile,
     is_email,
     normalize_email,
+    surface_for,
 )
 from app.services.firestore import get_repository
 from app.services.identity import mint_token, new_account_uid, new_session_id, new_ticket
@@ -203,7 +210,10 @@ def verify_otp(
         )
     )
 
-    held = repo.get_session(uid)
+    # Only the caller's own surface can be in the way. A phone signed in on this
+    # account is no obstacle to opening the web app, and asking about it would
+    # invite someone to sign their own phone out for no reason.
+    held = repo.get_session(uid, surface_for(x_platform or ""))
     return VerifyResponse(
         status="signed_up" if is_new else "signed_in",
         ticket=ticket.ticket,
@@ -232,7 +242,10 @@ def claim_session(body: ClaimRequest) -> ClaimResponse:
             detail="That sign-in has expired. Ask for a new code.",
         )
 
-    held = repo.get_session(ticket.uid)
+    # Contention is within a surface, never across one: the browser slot is the
+    # only thing a browser can displace, and the mobile slot the only thing a
+    # phone can.
+    held = repo.get_session(ticket.uid, surface_for(ticket.platform))
     if held is not None and held.install_id != ticket.install_id and not body.takeover:
         # Not an error the app should show as one: it is a question, and the
         # answer comes back as the same call with `takeover` set.
@@ -267,14 +280,28 @@ def claim_session(body: ClaimRequest) -> ClaimResponse:
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-def logout(user: CurrentUser = Depends(require_live_session)) -> None:
-    """Hand the device back.
+def logout(
+    user: CurrentUser = Depends(require_live_session),
+    x_session_id: str | None = Header(default=None),
+) -> None:
+    """Hand this device back.
 
     The account keeps everything; what ends is this device's hold on it, so the
     next person to pick the phone up gets a login screen and their own memories
     rather than someone else's.
+
+    Only the caller's own surface is released. Closing the browser tab must not
+    sign the phone in your pocket out, so the slot to clear is found by the
+    session id the caller presented rather than by the platform it claims — the
+    header is the caller's own, and `require_live_session` has just proved the
+    session id.
     """
-    get_repository().clear_session(user.uid)
+    repo = get_repository()
+    presented = (x_session_id or "").strip()
+    for surface, held in repo.get_sessions(user.uid).items():
+        if held.session_id == presented:
+            repo.clear_session(user.uid, surface)
+            return
 
 
 @profile_router.get("", response_model=ProfileView)

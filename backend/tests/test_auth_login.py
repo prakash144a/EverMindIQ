@@ -1,9 +1,9 @@
-"""Logging in with a code, holding an account on one device, and letting go.
+"""Logging in with a code, holding an account on two surfaces, and letting go.
 
 These drive the real endpoints rather than the `auth()` shortcut, because what
 they are about *is* the sign-in: one email means one account id however many
-phones it is opened on, one device holds it at a time, and signing out hands the
-phone to whoever picks it up next.
+devices it is opened on, one phone and one browser hold it at a time, and
+signing out hands that device to whoever picks it up next.
 """
 
 from __future__ import annotations
@@ -26,8 +26,10 @@ def code_for(email: str) -> str:
     return code
 
 
-def request_code(client, email: str, install_id: str = "phone-a"):
-    return client.post("/auth/otp/request", json={"email": email}, headers=device(install_id))
+def request_code(client, email: str, install_id: str = "phone-a", platform: str = "android"):
+    return client.post(
+        "/auth/otp/request", json={"email": email}, headers=device(install_id, platform)
+    )
 
 
 def verify(
@@ -36,11 +38,12 @@ def verify(
     install_id: str = "phone-a",
     code: str | None = None,
     name: str = "",
+    platform: str = "android",
 ):
     return client.post(
         "/auth/otp/verify",
         json={"email": email, "code": code or code_for(email), "preferred_name": name},
-        headers=device(install_id),
+        headers=device(install_id, platform),
     )
 
 
@@ -48,19 +51,43 @@ def claim(client, ticket: str, takeover: bool = False):
     return client.post("/auth/session", json={"ticket": ticket, "takeover": takeover})
 
 
-def log_in(client, email: str, install_id: str = "phone-a", name: str = "", takeover: bool = False):
+def log_in(
+    client,
+    email: str,
+    install_id: str = "phone-a",
+    name: str = "",
+    takeover: bool = False,
+    platform: str = "android",
+):
     """The whole flow, as the app performs it. Returns the claim response body."""
-    assert request_code(client, email, install_id).status_code == 204
-    verified = verify(client, email, install_id, name=name)
+    assert request_code(client, email, install_id, platform).status_code == 204
+    verified = verify(client, email, install_id, name=name, platform=platform)
     assert verified.status_code == 200, verified.text
     claimed = claim(client, verified.json()["ticket"], takeover=takeover)
     assert claimed.status_code == 200, claimed.text
     return claimed.json()
 
 
-def signed_in(body: dict) -> dict:
-    """Headers for a device that just logged in."""
-    return {"Authorization": f"Bearer {body['token']}", "X-Session-Id": body["session_id"]}
+def log_in_web(client, email: str, install_id: str = "browser-a", takeover: bool = False):
+    """The same flow from a browser, which signs into the other surface."""
+    return log_in(client, email, install_id, takeover=takeover, platform="web")
+
+
+def signed_in(body: dict, platform: str = "android") -> dict:
+    """Headers for a device that just logged in.
+
+    The platform rides along because it is what a refusal is explained in terms
+    of: a signed-out browser has to be told what replaced *the browser*.
+    """
+    return {
+        "Authorization": f"Bearer {body['token']}",
+        "X-Session-Id": body["session_id"],
+        "X-Platform": platform,
+    }
+
+
+def signed_in_web(body: dict) -> dict:
+    return signed_in(body, platform="web")
 
 
 # -- asking for a code --------------------------------------------------

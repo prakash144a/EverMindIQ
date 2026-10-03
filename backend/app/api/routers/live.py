@@ -33,7 +33,11 @@ router = APIRouter(tags=["live"])
 
 
 def _holds_the_session(uid: str, session_id: str | None) -> bool:
-    """Whether this socket belongs to the device currently signed in.
+    """Whether this socket belongs to a device currently signed in.
+
+    Either surface will do — a spoken recall from the browser is as legitimate
+    as one from the phone. As in `require_live_session`, holding an unguessable
+    session id that is still in one of the slots is the whole proof.
 
     Checked here rather than as a router dependency because a dependency on a
     WebSocket route can only refuse the handshake, and the app has to be able to
@@ -41,8 +45,11 @@ def _holds_the_session(uid: str, session_id: str | None) -> bool:
     """
     from app.services.firestore import get_repository
 
-    held = get_repository().get_session(uid)
-    return held is not None and held.session_id == (session_id or "").strip()
+    presented = (session_id or "").strip()
+    if not presented:
+        return False
+    slots = get_repository().get_sessions(uid)
+    return any(held.session_id == presented for held in slots.values())
 
 
 async def _resolve_ws_user(websocket: WebSocket, token: str | None) -> CurrentUser | None:

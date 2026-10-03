@@ -183,13 +183,38 @@ def device_label(platform: str) -> str:
     }.get(platform.strip().lower(), "another device")
 
 
-class DeviceSession(BaseModel):
-    """One device's hold on an account.
+# The two kinds of place an account can be open at once. An account holds one
+# session in each, and they never contend: signing in on a laptop's browser is
+# not a reason to sign a phone out, because the phone is not where the browser
+# is. Within a surface the old rule stands unchanged — one phone, one browser —
+# which is what keeps a shared device from quietly staying signed in.
+SURFACE_MOBILE = "mobile"
+SURFACE_WEB = "web"
+SURFACES = (SURFACE_MOBILE, SURFACE_WEB)
 
-    An account has exactly one at a time. That is the whole design: these are
-    someone's private memories on a phone that may be shared, so signing in
-    somewhere new ends the previous session rather than running alongside it —
-    and signing out frees the phone for the next person entirely.
+
+def surface_for(platform: str) -> str:
+    """Which slot a device signs into, from the platform it reports.
+
+    Everything that is not a browser is "mobile", including the desktop builds:
+    the distinction that matters is *the browser*, which is the one client that
+    can be opened alongside the phone someone is carrying. A platform we have
+    never heard of is treated as mobile rather than given a slot of its own, so
+    an unrecognised client can never mint itself extra sessions.
+    """
+    return SURFACE_WEB if platform.strip().lower() == "web" else SURFACE_MOBILE
+
+
+class DeviceSession(BaseModel):
+    """One device's hold on an account, within one surface.
+
+    An account has at most one per surface — one mobile, one browser — so the
+    phone in someone's pocket and the tab on their laptop can both be open, and
+    a memory recorded in either shows up in the other. Signing in on a second
+    phone still ends the first phone's session, and signing out still frees that
+    device for whoever picks it up next: these are private memories on devices
+    that get shared, and the rule only relaxes *across* surfaces, never within
+    one.
     """
 
     session_id: str
@@ -201,6 +226,10 @@ class DeviceSession(BaseModel):
     @property
     def label(self) -> str:
         return device_label(self.platform)
+
+    @property
+    def surface(self) -> str:
+        return surface_for(self.platform)
 
 
 class LoginTicket(BaseModel):

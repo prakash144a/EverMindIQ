@@ -274,12 +274,23 @@ deleted the old one. It worked, and it cost: the first device silently went blan
 audio objects (keyed `users/{uid}/audio/…`) stayed behind under a uid that account deletion would
 never sweep. A permanent uid removes all three, and the merge machinery with them.
 
-**One device at a time.** An account holds exactly one `DeviceSession` (`sessions/{uid}`, server-only).
+**One device per surface.** An account has two *surfaces* — `mobile` and `web` — and holds one
+`DeviceSession` in each (`sessions/{uid}`, server-only, a map of surface to session). The surface is
+derived from the reported platform: a browser is `web`, everything else is `mobile`, including any
+client we do not recognise, so an unknown platform can never mint itself a third session.
+
+Two surfaces because a browser is the one client that is genuinely *elsewhere*: someone typing a
+memory on their laptop still has their phone in their pocket, and signing that phone out to do it
+would be absurd. Within a surface the rule is unchanged — a second phone displaces the first, a
+second browser displaces the first — which is what still keeps a shared device from staying signed
+in. Contention, the 409, and the takeover question are therefore all scoped to the caller's own
+surface; a phone is never in a browser's way.
+
 Login is two steps because of the question in the middle:
 
 1. `POST /auth/otp/verify` checks the code and returns a short-lived single-use **ticket**, plus a
-   description of the device already signed in, if there is one.
-2. `POST /auth/session` spends the ticket. If another device holds the account it answers **409**
+   description of the device already signed in *on this surface*, if there is one.
+2. `POST /auth/session` spends the ticket. If another device holds that surface it answers **409**
    until the caller passes `takeover: true`.
 
 The split exists so the second device can show "your account is open on an Android phone, signed in
@@ -288,8 +299,11 @@ is what carries the verified state across the question. Signing someone out is n
 of a missing field.
 
 **Everything else is gated.** `require_live_session` sits on every app-facing router
-(`main.create_app`) and demands the live `X-Session-Id` beside the token. It reads the session
-document per request with no cache, deliberately: a cache here is a lie with a timer on it in both
+(`main.create_app`) and demands a live `X-Session-Id` beside the token. The id is matched against
+*both* slots rather than the one `X-Platform` claims: that header is the caller's own and proves
+nothing, whereas a session id is unguessable and belongs to exactly one slot. Which slot it turned
+up in is used only to word a refusal. It reads the session document per request with no cache,
+deliberately: a cache here is a lie with a timer on it in both
 directions — the device that just took over would be refused until it expired, and the one that was
 signed out would keep working. A refusal is structured, not a bare 401, because it is the **only**
 moment the replaced device can be told anything:
@@ -303,14 +317,16 @@ once, centrally, so no screen has to remember to. The WebSocket checks the same 
 closes with **4403** rather than 4401, since "you were signed out" and "your login failed" are
 different sentences.
 
-**Signing out** (`POST /auth/logout`) clears the session and nothing else. That is what makes one
+**Signing out** (`POST /auth/logout`) clears the caller's own surface and nothing else — found by
+the session id it presented, so closing a browser tab cannot sign a phone out. That is what makes one
 phone usable by several people: the memories stay with the account, the next person signs in with
 their own address, and the app invalidates every account-scoped provider so not a single row of the
 previous account survives the switch.
 
 **What this costs.** Losing access to the inbox loses the account — there is no password fallback.
-And "one device" is exactly one: a phone and a tablet cannot both be signed in. Both are consequences
-of the same choice, and both are worth revisiting only by turning the single session into a list.
+And a surface holds exactly one device: a phone and a tablet still cannot both be signed in, because
+both are `mobile`. Splitting further — per install, with a list of sessions someone can revoke — is
+the next step if it is ever wanted, and the slot map is already the shape to grow it from.
 
 ## 9. Phased delivery
 

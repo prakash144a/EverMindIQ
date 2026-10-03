@@ -20,6 +20,12 @@ os.environ["VOICEIQ_ACS_CONNECTION_STRING"] = ""
 os.environ["VOICEIQ_ACS_SENDER"] = ""
 os.environ["VOICEIQ_ACS_FORCE_SEND"] = "0"
 
+# Random sign-in codes, overriding the pinned one config/local.env sets for
+# local development. A suite that knew the code in advance could not tell a
+# wrong guess from a right one — several tests below guess "000000" expecting to
+# be refused, and a pinned code could make that guess correct.
+os.environ["VOICEIQ_MOCK_OTP_CODE"] = ""
+
 # One allowlisted admin for the whole suite. Deliberately a uid nothing else
 # uses, so every other `auth(...)` caller is a genuine non-admin and the
 # rejection tests are testing something real.
@@ -61,17 +67,17 @@ def auth(uid: str) -> dict:
     """Auth headers for `uid`: a bearer token, and the session that device holds.
 
     Mock mode treats the bearer token as the uid. The session id is the other
-    half — an account may be held by one device at a time, so a token alone is
-    refused. Opening one here on demand keeps every test that is *about*
-    something else talking to the API the way a signed-in app does; the tests
-    about signing in and out drive the real endpoints instead (see
-    `test_auth_sessions.py`).
+    half — an account is held by one device per surface, so a token alone is
+    refused. Opening a mobile one here on demand keeps every test that is
+    *about* something else talking to the API the way a signed-in app does; the
+    tests about signing in and out drive the real endpoints instead (see
+    `test_auth_login.py`).
     """
-    from app.models.user import DeviceSession
+    from app.models.user import SURFACE_MOBILE, DeviceSession
     from app.services.firestore import get_repository
 
     repo = get_repository()
-    held = repo.get_session(uid)
+    held = repo.get_session(uid, SURFACE_MOBILE)
     if held is None:
         held = repo.save_session(
             uid,
