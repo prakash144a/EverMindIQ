@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/dev_auth.dart';
 import '../widgets/formatting.dart';
 import 'api_client.dart';
 import 'auth.dart';
@@ -13,6 +14,9 @@ final apiClientProvider = Provider<ApiClient>((ref) {
   final auth = ref.read(firebaseAuthProvider);
   return ApiClient(
     tokenProvider: () async {
+      // Against the mock backend the bearer token *is* the uid, and there is no
+      // Firebase user to ask for one.
+      if (DevAuth.enabled) return DevAuth.isSignedIn ? DevAuth.token : null;
       final user = auth.currentUser;
       if (user == null) return null;
       return user.getIdToken();

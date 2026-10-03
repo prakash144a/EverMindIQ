@@ -83,7 +83,7 @@ class OtpService:
             if remaining > 0:
                 raise OtpError(f"Please wait {int(remaining) + 1}s before asking for another code.")
 
-        code = generate_code(self.settings.otp_code_length)
+        code = self._pinned_code() or generate_code(self.settings.otp_code_length)
         challenge = OtpChallenge(
             email=email,
             code_sha256=hash_code(code),
@@ -96,10 +96,25 @@ class OtpService:
 
         if self.settings.effective_mock:
             _MOCK_LAST_CODES[email] = code
+            # At WARNING, not INFO: uvicorn leaves the root logger at WARNING, so
+            # an INFO line here goes nowhere and a developer is left staring at a
+            # login form with no code. It is also genuinely worth warning about —
+            # this build is issuing codes nobody had to receive to know.
+            log.warning("mock mode: the sign-in code for %s is %s", email, code)
 
         subject, text, html = _body(code, self.settings.otp_ttl_seconds // 60)
         get_email_service().send(email, subject, text, html)
         return code
+
+    def _pinned_code(self) -> str:
+        """The fixed mock code, or empty to generate a random one.
+
+        The mock check is here rather than at the setting, so that there is one
+        place to read to be sure a real deployment cannot issue a known code.
+        """
+        if not self.settings.effective_mock:
+            return ""
+        return self.settings.mock_otp_code.strip()
 
     # -- checking ----------------------------------------------------------
     def verify_code(self, repo, email: str, code: str) -> OtpChallenge:

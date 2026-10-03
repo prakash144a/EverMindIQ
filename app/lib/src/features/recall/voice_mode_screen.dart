@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/config.dart';
 import '../../core/tokens.dart';
 import '../../data/auth.dart';
 import '../../data/live_voice.dart';
@@ -33,9 +32,8 @@ class _VoiceModeScreenState extends ConsumerState<VoiceModeScreen> {
   @override
   void initState() {
     super.initState();
-    final auth = ref.read(firebaseAuthProvider);
     _voice = LiveVoiceSession(
-      () async => await auth.currentUser?.getIdToken() ?? AppConfig.devUid,
+      ref.read(liveTokenProvider),
       // A call opened while Recall is scoped to one journal stays scoped to it,
       // exactly as a typed question would.
       journalId: ref.read(recallScopeProvider),

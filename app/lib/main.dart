@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'firebase_options.dart';
 import 'src/app.dart';
+import 'src/core/dev_auth.dart';
 import 'src/core/device_identity.dart';
 import 'src/core/session_store.dart';
 import 'src/core/theme_mode_store.dart';
@@ -35,6 +36,9 @@ Future<void> main() async {
   // Likewise: whether anyone is signed in on this device has to be known before
   // the first frame decides between the app and the login screen.
   await SessionStore.load();
+  // Dev builds pointed at the mock backend keep their credential here rather
+  // than in Firebase; a no-op in every other build.
+  await DevAuth.load();
   // Before runApp so the very first frame is already in the chosen mode
   // rather than flashing the OS default and correcting itself.
   await ThemeModeStore.load();

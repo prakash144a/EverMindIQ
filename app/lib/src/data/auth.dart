@@ -1,6 +1,8 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/config.dart';
+import '../core/dev_auth.dart';
 import '../core/session_store.dart';
 import 'api_client.dart';
 import 'models.dart';
@@ -12,6 +14,22 @@ final firebaseAuthProvider = Provider<FirebaseAuth>((ref) => FirebaseAuth.instan
 /// Emits the current signed-in user (null when signed out).
 final authStateProvider = StreamProvider<User?>((ref) {
   return ref.watch(firebaseAuthProvider).authStateChanges();
+});
+
+/// The credential the `/live` socket carries, as a function the socket can call
+/// when it reconnects rather than a value captured once.
+///
+/// A socket cannot present "no token" and be turned away politely — it is a
+/// query parameter on a URL — so this always answers with a string, falling
+/// back to [AppConfig.devUid] for a build with no sign-in wired up at all.
+/// Which credential that is depends on where the app is pointed: a Firebase ID
+/// token normally, the mock token when [DevAuth] is on.
+final liveTokenProvider = Provider<Future<String> Function()>((ref) {
+  final auth = ref.read(firebaseAuthProvider);
+  return () async {
+    if (DevAuth.enabled) return DevAuth.isSignedIn ? DevAuth.token : AppConfig.devUid;
+    return await auth.currentUser?.getIdToken() ?? AppConfig.devUid;
+  };
 });
 
 /// Where the app is, in terms of having an account to show.
@@ -42,9 +60,10 @@ class AuthController extends Notifier<AuthState> {
     // Resolved by `main` before the first frame, so this is a read rather than
     // a race: a stored session plus a live Firebase user means signed in.
     try {
-      final user = ref.read(firebaseAuthProvider).currentUser;
+      final credentialed =
+          DevAuth.enabled ? DevAuth.isSignedIn : ref.read(firebaseAuthProvider).currentUser != null;
       return AuthState(
-        user != null && SessionStore.isSignedIn ? AuthStage.signedIn : AuthStage.signedOut,
+        credentialed && SessionStore.isSignedIn ? AuthStage.signedIn : AuthStage.signedOut,
       );
     } catch (_) {
       // Firebase never came up. Signed out is the honest answer and the only
@@ -58,7 +77,11 @@ class AuthController extends Notifier<AuthState> {
     // Order matters: the session id has to be stored before anything can make a
     // request with it, and the Firebase sign-in is what makes requests possible.
     await SessionStore.save(result.sessionId);
-    await ref.read(firebaseAuthProvider).signInWithCustomToken(result.token);
+    if (DevAuth.enabled) {
+      await DevAuth.save(result.token);
+    } else {
+      await ref.read(firebaseAuthProvider).signInWithCustomToken(result.token);
+    }
     _resetAccountScopedState();
     state = const AuthState(AuthStage.signedIn);
   }
@@ -90,6 +113,7 @@ class AuthController extends Notifier<AuthState> {
 
   Future<void> _forget() async {
     await SessionStore.clear();
+    await DevAuth.clear();
     try {
       await ref.read(firebaseAuthProvider).signOut();
     } catch (_) {/* best effort; the session id is already gone */}

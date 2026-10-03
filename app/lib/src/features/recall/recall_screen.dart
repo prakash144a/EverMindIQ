@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/config.dart';
 import '../../core/tokens.dart';
 import '../../data/ai_conversation.dart';
 import '../../data/auth.dart';
@@ -32,8 +31,7 @@ class _RecallScreenState extends ConsumerState<RecallScreen> {
   @override
   void initState() {
     super.initState();
-    final auth = ref.read(firebaseAuthProvider);
-    _ai = AiConversation(() async => await auth.currentUser?.getIdToken() ?? AppConfig.devUid);
+    _ai = AiConversation(ref.read(liveTokenProvider));
     _ai.addListener(_onUpdate);
     _ai.connect();
   }

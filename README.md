@@ -67,6 +67,27 @@ flutter pub get
 flutter run                     # point API_BASE_URL at your backend
 ```
 
+Against the **mock backend** add `--dart-define=MOCK_AUTH=true`. Mock mode has no Firebase — the
+"custom token" it returns is the uid — so without this the app hands that string to
+`signInWithCustomToken` and never gets past the login screen.
+
+### The web app
+```bash
+cd app
+flutter run -d chrome --web-port=8080   --dart-define=MOCK_AUTH=true --dart-define=API_BASE_URL=http://localhost:8000
+```
+
+Port 8080 because that is the origin the deployed backend's CORS allowlist names
+(`infra/terraform.tfvars`); against a local backend any port works. `localhost` is a secure context,
+so the microphone is available without TLS.
+
+### Signing in locally
+
+Mock mode sends no email. The code is pinned to **`123456`** (`VOICEIQ_MOCK_OTP_CODE` in
+`config/local.env`) and logged on every request, so local sign-in needs no inbox. Blank that setting
+for random codes, which is what the test suite runs with. It is honoured only when `effective_mock`
+is true, so a deployment with a GCP project configured cannot issue a code anyone can guess.
+
 ## Status
 
 MVP-first build. See [`docs/architecture.md`](docs/architecture.md) §8 for phased delivery.

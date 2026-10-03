@@ -93,6 +93,18 @@ class Settings(BaseSettings):
     otp_resend_cooldown_seconds: int = 60
     otp_code_length: int = 6
 
+    # Mock mode only: pin every code to this value instead of a random one.
+    # Local dev sends no email, so without it signing in means reading a code
+    # out of a second window on every attempt.
+    #
+    # Ignored unless `effective_mock` — see `OtpService.request_code`, which is
+    # where that is enforced. It cannot take effect in a deployment that has a
+    # GCP project configured, and a deployment without one is running entirely
+    # on in-memory fakes with no real account to let anyone into. Empty means
+    # random, which is what the test suite runs with so that a "wrong code" in a
+    # test is genuinely wrong.
+    mock_otp_code: str = ""
+
     # Admin console ---------------------------------------------------------
     # Comma-separated, NOT list[str]: pydantic-settings parses a list-typed env
     # var as JSON, so `VOICEIQ_ADMIN_UIDS=a,b` would fail validation and the
