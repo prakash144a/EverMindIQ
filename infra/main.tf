@@ -158,6 +158,14 @@ resource "google_pubsub_subscription" "ingest_worker" {
   retry_policy {
     minimum_backoff = "10s"
   }
+
+  # Never expire. Left unset, a subscription is deleted after 31 days without
+  # activity — and this one was: a quiet month, and then every new recording sat
+  # at "transcribing" forever, because publishing to a topic nobody subscribes
+  # to succeeds and delivers nothing. An empty ttl is how Pub/Sub spells never.
+  expiration_policy {
+    ttl = ""
+  }
 }
 
 # --- Backend service account + IAM (least privilege) ------------------------
