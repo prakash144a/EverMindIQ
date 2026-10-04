@@ -9,17 +9,20 @@ import 'package:voiceiq/src/core/draft_store.dart';
 import 'package:voiceiq/src/core/theme.dart';
 import 'package:voiceiq/src/data/ai_conversation.dart';
 import 'package:voiceiq/src/data/api_client.dart';
+import 'package:voiceiq/src/data/audio_playback.dart';
 import 'package:voiceiq/src/data/models.dart';
 import 'package:voiceiq/src/data/providers.dart';
+import 'package:voiceiq/src/features/recall/recall_screen.dart';
+import 'package:voiceiq/src/features/record/record_screen.dart';
 import 'package:voiceiq/src/features/shell/app_shell.dart';
-import 'package:voiceiq/src/features/shell/quick_composer.dart';
+import 'package:voiceiq/src/features/shell/wide_settings.dart';
 import 'package:voiceiq/src/widgets/attach_placeholder.dart';
 
-/// The app on a wide screen is three panes — a rail, the memories with a
-/// composer, and Recall always open — and on a phone-sized one it is exactly
-/// what it was. Same screens, same data; only the arrangement differs, so what
-/// matters here is which arrangement a window gets and that the new pieces in
-/// the wide one actually reach the server.
+/// The app on a wide screen is a rail and a page beside it; on a phone-sized
+/// one it is exactly what it was. Same screens, same data — only the
+/// arrangement differs, so what matters here is which arrangement a window
+/// gets, that Home's two doors open the pages they name, and that everything
+/// that used to be in the menu can still be reached.
 void main() {
   late List<http.BaseRequest> sent;
 
@@ -38,7 +41,7 @@ void main() {
     'summary': 'Appa told the story about the bicycle again.',
   };
 
-  Future<void> pumpShell(WidgetTester tester, Size window, {bool saveFails = false}) async {
+  Future<void> pumpShell(WidgetTester tester, Size window) async {
     tester.view.physicalSize = window;
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -54,12 +57,6 @@ void main() {
           return http.Response(
             jsonEncode({'preferred_name': 'Prakash', 'has_profile': true, 'text_max_chars': 1000}),
             200,
-          );
-        case '/recordings/text':
-          if (saveFails) return http.Response('{"detail":"nope"}', 500);
-          return http.Response(
-            jsonEncode({'id': 'new', 'event_date': '2026-10-04', 'status': 'uploaded', 'source': 'text'}),
-            201,
           );
         case '/chat':
           return http.Response(
@@ -80,12 +77,12 @@ void main() {
         overrides: [
           apiClientProvider
               .overrideWithValue(ApiClient(client: client, baseUrl: 'http://test.invalid')),
+          audioPlaybackProvider.overrideWith(_QuietPlayback.new),
         ],
         child: MaterialApp(theme: AppTheme.light(), home: const AppShell()),
       ),
     );
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 100));
+    await settle(tester);
   }
 
   const desktop = Size(1440, 900);
@@ -95,91 +92,124 @@ void main() {
       sent.lastWhere((r) => r.url.path == path && r.method == 'POST') as http.Request;
 
   group('which layout a window gets', () {
-    testWidgets('a wide window is three panes', (tester) async {
+    testWidgets('a wide window is a rail and a page', (tester) async {
       await pumpShell(tester, desktop);
 
-      // The rail: places that used to be behind the menu.
-      for (final place in ['Home', 'Timeline', 'Journals', 'Milestones', 'Insights', 'More']) {
+      // The rail: the places that are behind the menu on a phone.
+      for (final place in ['Home', 'Timeline', 'Journals', 'Milestones', 'Insights', 'Settings']) {
         expect(find.text(place), findsOneWidget, reason: place);
       }
-      // The memories, with the composer above them.
-      expect(find.text('Your memories'), findsOneWidget);
-      expect(find.byType(QuickComposer), findsOneWidget);
-      expect(find.text('The story about the bicycle'), findsOneWidget);
-      // Recall, open without being asked for.
+      expect(find.text('More'), findsNothing, reason: 'it is called Settings now');
+
+      // Home: the two things the app is for, then the recent memories.
+      expect(find.text('Record'), findsOneWidget);
       expect(find.text('Recall'), findsOneWidget);
-      expect(find.text('Ask your memories…'), findsOneWidget);
-      // And none of the phone's chrome.
-      expect(find.text('Record'), findsNothing);
+      expect(find.text('Recent moments'), findsOneWidget);
+      expect(find.text('The story about the bicycle'), findsOneWidget);
+
+      // Recall is somewhere to go, not something pinned to the side.
+      expect(find.byType(RecallScreen), findsNothing);
     });
 
     testWidgets('a phone-sized window is the phone layout, untouched', (tester) async {
       await pumpShell(tester, phone);
 
       expect(find.text('Record'), findsOneWidget);
-      expect(find.text('Recall'), findsOneWidget); // the dock button, not a pane
-      expect(find.byType(QuickComposer), findsNothing);
+      expect(find.text('Recall'), findsOneWidget);
       expect(find.text('Timeline'), findsNothing);
-      expect(find.text('Ask your memories…'), findsNothing);
-    });
-
-    testWidgets('the rail changes what the middle pane shows, and Recall stays', (tester) async {
-      await pumpShell(tester, desktop);
-
-      await tester.tap(find.text('Journals'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 100));
-
-      expect(find.byType(QuickComposer), findsNothing);
-      expect(find.text('Ask your memories…'), findsOneWidget);
+      expect(find.text('Settings'), findsNothing);
+      expect(find.byTooltip('Open navigation menu'), findsOneWidget);
     });
   });
 
-  group('writing a memory in place', () {
-    testWidgets('typing and saving posts the memory and empties the field', (tester) async {
+  group("home's two doors", () {
+    testWidgets('Record opens the record page, beside the rail', (tester) async {
       await pumpShell(tester, desktop);
 
-      final field = find.descendant(
-        of: find.byType(QuickComposer),
-        matching: find.byType(TextField),
-      );
-      await tester.enterText(field, '  We drove to the coast at sunrise.  ');
-      await tester.pump();
-      expect(DraftStore.current, isNotEmpty, reason: 'kept as a draft before it is saved');
+      await tester.tap(find.text('Record'));
+      await settle(tester);
 
-      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 100));
-
-      expect(jsonDecode(posted('/recordings/text').body),
-          {'text': 'We drove to the coast at sunrise.'});
-      expect(tester.widget<TextField>(field).controller!.text, isEmpty);
-      expect(DraftStore.current, isEmpty);
+      expect(find.byType(RecordScreen), findsOneWidget);
+      expect(find.text('What happened? Write it in any language.'), findsOneWidget);
+      expect(find.text('Timeline'), findsOneWidget, reason: 'the rail stays');
     });
 
-    testWidgets('a save that fails keeps what was written', (tester) async {
-      await pumpShell(tester, desktop, saveFails: true);
-
-      final field = find.descendant(
-        of: find.byType(QuickComposer),
-        matching: find.byType(TextField),
-      );
-      await tester.enterText(field, 'Too precious to lose to an error.');
-      await tester.pump();
-      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 100));
-
-      expect(tester.widget<TextField>(field).controller!.text, 'Too precious to lose to an error.');
-      expect(DraftStore.current, 'Too precious to lose to an error.');
-      expect(find.textContaining('Could not save'), findsOneWidget);
-    });
-
-    testWidgets('nothing can be saved until something is written', (tester) async {
+    testWidgets('Recall opens the recall page, and a question is answered there',
+        (tester) async {
       await pumpShell(tester, desktop);
 
-      final save = tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Save'));
-      expect(save.onPressed, isNull);
+      await tester.tap(find.text('Recall'));
+      await settle(tester);
+      expect(find.byType(RecallScreen), findsOneWidget);
+      expect(find.text('Timeline'), findsOneWidget, reason: 'the rail stays');
+
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Ask anything about your memories…'),
+        'When did Appa tell the bicycle story?',
+      );
+      await tester.testTextInput.receiveAction(TextInputAction.send);
+      await settle(tester);
+
+      expect(jsonDecode(posted('/chat').body)['question'], 'When did Appa tell the bicycle story?');
+      expect(find.text('On 1 October.'), findsOneWidget);
+    });
+
+    testWidgets('closing either comes back to Home', (tester) async {
+      await pumpShell(tester, desktop);
+
+      await tester.tap(find.text('Recall'));
+      await settle(tester);
+      await tester.tap(find.byIcon(Icons.close));
+      await settle(tester);
+
+      expect(find.byType(RecallScreen), findsNothing);
+      expect(find.text('Recent moments'), findsOneWidget);
+    });
+
+    testWidgets('the rail leaves a page that is open', (tester) async {
+      await pumpShell(tester, desktop);
+
+      await tester.tap(find.text('Record'));
+      await settle(tester);
+      await tester.tap(find.text('Journals'));
+      await settle(tester);
+
+      expect(find.byType(RecordScreen), findsNothing);
+    });
+  });
+
+  group('settings', () {
+    testWidgets('holds everything the menu used to, down its left side', (tester) async {
+      await pumpShell(tester, desktop);
+
+      await tester.tap(find.text('Settings'));
+      await settle(tester);
+
+      expect(find.byType(WideSettings), findsOneWidget);
+      for (final section in [
+        'General & language',
+        'People, places & tags',
+        'Export & backup',
+        'How it works',
+        'Report a problem',
+      ]) {
+        // Once in the list; a second time is the open section's own title.
+        expect(find.text(section), findsAtLeastNWidgets(1), reason: section);
+      }
+    });
+
+    testWidgets('choosing a section shows it without leaving the page', (tester) async {
+      await pumpShell(tester, desktop);
+      await tester.tap(find.text('Settings'));
+      await settle(tester);
+
+      await tester.tap(find.text('Export & backup'));
+      await settle(tester);
+
+      // In the list and as the section's heading; the list is still there.
+      expect(find.text('Export & backup'), findsNWidgets(2));
+      expect(find.text('Report a problem'), findsOneWidget);
+      expect(find.byType(WideSettings), findsOneWidget);
     });
   });
 
@@ -187,12 +217,11 @@ void main() {
     testWidgets('the place for photos, videos and files says it is not built yet',
         (tester) async {
       await pumpShell(tester, desktop);
+      await tester.tap(find.text('Record'));
+      await settle(tester);
 
       await tester.tap(find.byType(AttachPlaceholderButton));
-      // Not `pumpAndSettle`: the Recall pane's orb breathes for as long as it is
-      // on screen, and on a wide screen it always is.
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400));
+      await settle(tester);
 
       expect(find.text(AttachPlaceholderButton.comingSoon), findsOneWidget);
       for (final kind in ['Photo', 'Video', 'File']) {
@@ -204,26 +233,6 @@ void main() {
       }
       // A placeholder: opening it reaches no server.
       expect(sent.any((r) => r.url.path.contains('upload')), isFalse);
-    });
-  });
-
-  group('recall beside the memories', () {
-    testWidgets('a question typed in the pane is asked, and answered there', (tester) async {
-      await pumpShell(tester, desktop);
-
-      await tester.enterText(
-        find.widgetWithText(TextField, 'Ask your memories…'),
-        'When did Appa tell the bicycle story?',
-      );
-      await tester.testTextInput.receiveAction(TextInputAction.send);
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 100));
-      await tester.pump(const Duration(milliseconds: 400));
-
-      expect(jsonDecode(posted('/chat').body)['question'], 'When did Appa tell the bicycle story?');
-      expect(find.text('On 1 October.'), findsOneWidget);
-      // Still three panes: the answer did not take the window over.
-      expect(find.byType(QuickComposer), findsOneWidget);
     });
   });
 
@@ -275,4 +284,25 @@ void main() {
       expect(ai.messages, isEmpty);
     });
   });
+}
+
+/// Opening the record page first stops whatever memory is playing. There is no
+/// audio plugin under test, so the real controller's `stop` never returns and
+/// the page never opens; this one has nothing to stop.
+class _QuietPlayback extends AudioPlaybackController {
+  @override
+  PlaybackState build() => const PlaybackState();
+
+  @override
+  Future<void> stop() async {}
+}
+
+/// Let requests land and transitions finish.
+///
+/// Not `pumpAndSettle`: the Recall page's orb breathes for as long as it is on
+/// screen, and an animation that never ends is an app that never settles.
+Future<void> settle(WidgetTester tester) async {
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 100));
+  await tester.pump(const Duration(milliseconds: 500));
 }

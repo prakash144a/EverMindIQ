@@ -16,14 +16,15 @@ import 'voice_mode_screen.dart';
 /// plus a mic button that opens hands-free **voice mode** (an immersive,
 /// streaming-style listening splash).
 ///
-/// Two homes. On a phone it is a full-screen route with a close button. On a
-/// wide screen it is [embedded]: a pane that stays open beside the memories,
-/// with nothing to close and nothing to go back to.
+/// A page of its own everywhere: a full-screen route on a phone, and on a wide
+/// screen the same route filling the area beside the rail. Its contents keep to
+/// a readable column either way, so a conversation on a monitor is not a line
+/// of text running the width of the window.
 class RecallScreen extends ConsumerStatefulWidget {
-  const RecallScreen({super.key, this.embedded = false});
+  const RecallScreen({super.key});
 
-  /// Shown as a permanent pane rather than pushed as a route.
-  final bool embedded;
+  /// The widest the conversation grows.
+  static const double maxWidth = 760;
 
   @override
   ConsumerState<RecallScreen> createState() => _RecallScreenState();
@@ -39,7 +40,7 @@ class _RecallScreenState extends ConsumerState<RecallScreen> {
   void initState() {
     super.initState();
     // Read at ask time, not captured now: the client is rebuilt when the
-    // account changes, and a pane that stays open must not keep the old one.
+    // account changes, and a conversation must not go on using the old one.
     _ai = AiConversation(
       (question, {journalId}) =>
           ref.read(apiClientProvider).chat(question, journalId: journalId),
@@ -101,8 +102,8 @@ class _RecallScreenState extends ConsumerState<RecallScreen> {
 
   void _openVoiceMode() {
     FocusScope.of(context).unfocus();
-    // Over the whole window, from the pane too: a spoken conversation is the
-    // one thing here that wants the room to itself.
+    // Over the whole window, rail and all: a spoken conversation is the one
+    // thing here that wants the room to itself.
     Navigator.of(context, rootNavigator: true).push(
       MaterialPageRoute(builder: (_) => const VoiceModeScreen(), fullscreenDialog: true),
     );
@@ -134,17 +135,17 @@ class _RecallScreenState extends ConsumerState<RecallScreen> {
             ),
           ),
           child: SafeArea(
-            child: Column(
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: RecallScreen.maxWidth),
+                child: Column(
               children: [
                 Row(
                   children: [
-                    if (widget.embedded)
-                      const SizedBox(width: Insets.lg, height: 48)
-                    else
-                      IconButton(
-                        icon: const Icon(Icons.close, color: Colors.white70),
-                        onPressed: () => Navigator.of(context).maybePop(),
-                      ),
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white70),
+                      onPressed: () => Navigator.of(context).maybePop(),
+                    ),
                     const Text('Recall',
                         style: TextStyle(
                             color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
@@ -186,15 +187,12 @@ class _RecallScreenState extends ConsumerState<RecallScreen> {
                 _InputBar(
                   controller: _controller,
                   focusNode: _inputFocus,
-                  // The pane is narrower than a phone held sideways; the long
-                  // version is cut off mid-word there.
-                  hint: widget.embedded
-                      ? 'Ask your memories…'
-                      : 'Ask anything about your memories…',
                   onMicTap: _openVoiceMode,
                   onSend: _send,
                 ),
               ],
+                ),
+              ),
             ),
           ),
         ),
@@ -215,7 +213,7 @@ class _Bubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final isUser = msg.fromUser;
     // Sized against the space the conversation actually has, not the window:
-    // in the side pane those are very different numbers.
+    // on a wide screen those are very different numbers.
     return LayoutBuilder(
       builder: (context, box) => _bubble(isUser, box.maxWidth * 0.82),
     );
@@ -439,14 +437,12 @@ class _InputBar extends StatelessWidget {
   const _InputBar({
     required this.controller,
     required this.focusNode,
-    required this.hint,
     required this.onMicTap,
     required this.onSend,
   });
 
   final TextEditingController controller;
   final FocusNode focusNode;
-  final String hint;
   final VoidCallback onMicTap;
   final VoidCallback onSend;
 
@@ -485,7 +481,7 @@ class _InputBar extends StatelessWidget {
               textInputAction: TextInputAction.send,
               onSubmitted: (_) => onSend(),
               decoration: InputDecoration(
-                hintText: hint,
+                hintText: 'Ask anything about your memories…',
                 hintStyle: const TextStyle(color: Colors.white38),
                 filled: true,
                 fillColor: Colors.white.withValues(alpha: 0.08),

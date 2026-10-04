@@ -13,7 +13,12 @@ import '../../widgets/formatting.dart';
 /// Whatever the app has recently failed at is captured by [ErrorLog] and offered
 /// as an attachment, so the user doesn't have to describe a stack trace.
 class FeedbackScreen extends ConsumerStatefulWidget {
-  const FeedbackScreen({super.key, this.prefillMessage});
+  const FeedbackScreen({super.key, this.prefillMessage, this.onSent});
+
+  /// Called once a report has been sent. Left null the screen closes itself,
+  /// which is right when it was pushed. As a section of the Settings page it is
+  /// not a route, and popping would take the whole page away with it.
+  final VoidCallback? onSent;
 
   /// Seeded when the user taps "Report" on an error card.
   final String? prefillMessage;
@@ -64,7 +69,12 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
             platform: _platform,
           );
       if (!mounted) return;
-      Navigator.of(context).pop();
+      final sent = widget.onSent;
+      if (sent != null) {
+        sent();
+      } else {
+        Navigator.of(context).pop();
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Thanks — your report was sent.')),
       );

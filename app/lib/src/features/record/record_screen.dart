@@ -29,11 +29,11 @@ import '../../widgets/waveform.dart';
 /// worth keeping is often a moment you cannot say it out loud; speaking is a
 /// deliberate choice, made from the switch at the top.
 class RecordScreen extends ConsumerStatefulWidget {
-  const RecordScreen({super.key, this.startInVoice = false});
+  const RecordScreen({super.key});
 
-  /// Open on Speak rather than Write, for a caller whose button was a
-  /// microphone. Nothing starts recording until the mic here is tapped.
-  final bool startInVoice;
+  /// The widest the capture column grows. On a phone this is never reached; on
+  /// a monitor it keeps the page from being one line of text a metre long.
+  static const double maxWidth = 760;
 
   @override
   ConsumerState<RecordScreen> createState() => _RecordScreenState();
@@ -70,7 +70,6 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
   @override
   void initState() {
     super.initState();
-    if (widget.startInVoice) _mode = _Mode.voice;
     // Drives the character counter and the Save button's enabled state — and
     // keeps the draft, so what has been typed outlives this screen.
     _textCtl.addListener(() {
@@ -268,7 +267,10 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
             ),
           ),
           child: SafeArea(
-            child: Column(
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: RecordScreen.maxWidth),
+                child: Column(
               children: [
                 Align(
                   alignment: Alignment.centerLeft,
@@ -293,6 +295,8 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
                   child: _mode == _Mode.voice ? _buildVoiceBody() : _buildTextBody(),
                 ),
               ],
+                ),
+              ),
             ),
           ),
         ),

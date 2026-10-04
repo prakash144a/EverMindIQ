@@ -6,7 +6,12 @@ import '../../core/tokens.dart';
 /// privacy promise that makes people willing to put a life into it.
 /// Reachable from the menu; also suitable as a first-run intro.
 class OnboardingScreen extends StatefulWidget {
-  const OnboardingScreen({super.key});
+  const OnboardingScreen({super.key, this.onDone});
+
+  /// What the last page's button does. Left null it closes the screen, which
+  /// is right when the screen was pushed; shown as a section of the Settings
+  /// page there is nothing to close, so the page says where to go instead.
+  final VoidCallback? onDone;
 
   @override
   State<OnboardingScreen> createState() => _OnboardingScreenState();
@@ -111,7 +116,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               child: FilledButton(
                 onPressed: () {
                   if (_isLast) {
-                    Navigator.of(context).maybePop();
+                    final done = widget.onDone;
+                    if (done != null) {
+                      done();
+                    } else {
+                      Navigator.of(context).maybePop();
+                    }
                   } else {
                     _controller.nextPage(duration: Motion.medium, curve: Curves.easeInOut);
                   }

@@ -22,15 +22,12 @@ import 'wide_shell.dart';
 /// It used to end by asking the user to create an account, because until then
 /// their memories lived on the phone alone. Nothing reaches this screen without
 /// an account any more, so there is nothing left to ask.
-Future<void> openRecordScreen(BuildContext context, WidgetRef ref, {bool voice = false}) async {
+Future<void> openRecordScreen(BuildContext context, WidgetRef ref) async {
   // Don't let a playing memory bleed into the new recording.
   await ref.read(audioPlaybackProvider.notifier).stop();
   if (!context.mounted) return;
   final created = await Navigator.of(context).push<bool>(
-    MaterialPageRoute(
-      builder: (_) => RecordScreen(startInVoice: voice),
-      fullscreenDialog: true,
-    ),
+    MaterialPageRoute(builder: (_) => const RecordScreen(), fullscreenDialog: true),
   );
   if (created != true) return;
 
@@ -44,7 +41,7 @@ Future<void> openRecordScreen(BuildContext context, WidgetRef ref, {bool voice =
 /// else lives in the menu.
 ///
 /// That is the phone's layout, and on a phone-sized window it is unchanged. On
-/// a wide one the same screens are arranged as three panes instead — see
+/// a wide one the same screens sit beside a navigation rail instead — see
 /// [WideShell] — because a layout built for a thumb, stretched across a
 /// monitor, hides nine destinations behind a menu and spends the rest of the
 /// width on two enormous buttons.
