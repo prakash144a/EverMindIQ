@@ -14,6 +14,7 @@ import '../../core/tokens.dart';
 import '../../data/api_client.dart';
 import '../../data/models.dart';
 import '../../data/providers.dart';
+import '../../widgets/attach_placeholder.dart';
 import '../../widgets/immersive_chrome.dart';
 import '../../widgets/formatting.dart';
 import '../../widgets/journal_picker.dart';
@@ -28,7 +29,11 @@ import '../../widgets/waveform.dart';
 /// worth keeping is often a moment you cannot say it out loud; speaking is a
 /// deliberate choice, made from the switch at the top.
 class RecordScreen extends ConsumerStatefulWidget {
-  const RecordScreen({super.key});
+  const RecordScreen({super.key, this.startInVoice = false});
+
+  /// Open on Speak rather than Write, for a caller whose button was a
+  /// microphone. Nothing starts recording until the mic here is tapped.
+  final bool startInVoice;
 
   @override
   ConsumerState<RecordScreen> createState() => _RecordScreenState();
@@ -65,6 +70,7 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
   @override
   void initState() {
     super.initState();
+    if (widget.startInVoice) _mode = _Mode.voice;
     // Drives the character counter and the Save button's enabled state — and
     // keeps the draft, so what has been typed outlives this screen.
     _textCtl.addListener(() {
@@ -186,7 +192,7 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
     } catch (e) {
       setState(() {
         _phase = _Phase.idle;
-        _error = _messageFor(e);
+        _error = saveErrorMessage(e);
       });
     }
   }
@@ -212,7 +218,7 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
     } catch (e) {
       setState(() {
         _phase = _Phase.idle;
-        _error = _messageFor(e);
+        _error = saveErrorMessage(e);
       });
     }
   }
@@ -408,14 +414,18 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
               ),
             ),
           ),
-          if (_textCtl.text.trim().isNotEmpty && !saving)
-            const Padding(
-              padding: EdgeInsets.only(top: Insets.xs),
-              child: Text(
-                'Draft kept on this device until you save.',
-                style: TextStyle(color: Colors.white54, fontSize: 12),
-              ),
-            ),
+          Row(
+            children: [
+              const AttachPlaceholderButton(color: Colors.white70),
+              if (_textCtl.text.trim().isNotEmpty && !saving)
+                const Expanded(
+                  child: Text(
+                    'Draft kept on this device until you save.',
+                    style: TextStyle(color: Colors.white54, fontSize: 12),
+                  ),
+                ),
+            ],
+          ),
           if (_error != null) _errorText(),
           const SizedBox(height: Insets.md),
           FilledButton.icon(
@@ -489,7 +499,7 @@ String _resetSentence(UserProfile limits) {
 /// Keyed on the `error` code rather than the status: 413 covers both a recording
 /// that ran long and a typed memory that ran long, and only the server knows
 /// which one it refused.
-String _messageFor(Object e) {
+String saveErrorMessage(Object e) {
   return switch (e is ApiException ? _errorCode(e) : '') {
     'recording_quota' => 'That used up this month’s voice memories, so this one could '
         'not be saved. Writing memories is always free.',

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../widgets/content_navigator.dart';
 import '../../core/tokens.dart';
 import '../../data/models.dart';
 import '../../data/providers.dart';
@@ -13,8 +14,11 @@ import '../../widgets/states.dart';
 
 /// Opens the full view of one memory. The lists only ever have room for a
 /// title, so this is the only place the memory itself can actually be read.
+///
+/// Goes through [ContentNavigator], so on a wide screen a memory opened from
+/// the Recall pane appears beside the conversation instead of inside it.
 Future<void> openMemoryDetail(BuildContext context, String recordingId) {
-  return Navigator.of(context).push(
+  return ContentNavigator.of(context).push(
     MaterialPageRoute(builder: (_) => MemoryDetailScreen(recordingId: recordingId)),
   );
 }

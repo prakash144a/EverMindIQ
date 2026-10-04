@@ -1,10 +1,6 @@
-import 'dart:async';
-import 'dart:convert';
-
 import 'package:flutter/foundation.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
 
-import '../core/config.dart';
+import 'models.dart';
 
 /// A single turn in a conversation with the memory AI.
 class AiMessage {
@@ -18,7 +14,7 @@ class AiMessage {
 
   final String text;
   final bool fromUser;
-  final List<Map<String, dynamic>> citations;
+  final List<Citation> citations;
 
   /// Set when the answer was drawn from a single journal — which may have been
   /// inferred from the question rather than chosen with the picker. An answer
@@ -29,95 +25,81 @@ class AiMessage {
   bool get isScoped => !fromUser && journalId.isNotEmpty;
 }
 
-/// Fetches a bearer token (a Firebase ID token in production).
-typedef TokenFetch = Future<String?> Function();
+/// Asks one question and returns its answer. In the app this is
+/// `ApiClient.chat`; a test hands in whatever it likes.
+typedef Ask = Future<ChatAnswer> Function(String question, {String? journalId});
 
-/// Drives a conversation over the backend `/live` WebSocket (a Gemini Live
-/// proxy in production; a text RAG stand-in in mock mode). Shared by the
-/// voice-first Recall screen and the text Chat screen so the transport and
-/// message state live in one place.
+/// The typed conversation on the Recall screen: the turns so far, and whether
+/// an answer is on its way.
 ///
-/// Voice I/O (mic streaming + spoken answers) rides on this same channel in a
-/// later phase; today both screens send/receive text.
+/// Each question is one ordinary request to `/chat`. It used to ride the
+/// `/live` WebSocket instead, and that had stopped working without anyone
+/// noticing: the socket was opened without the session id every other call
+/// carries, so the server refused the handshake, and a question typed into a
+/// socket that never opened simply sat at "Recalling…" forever. A typed
+/// question has no use for a socket anyway — the server answers each one on its
+/// own, with nothing kept between them — and as a request it gets the session,
+/// the sign-out handling and the error reporting that every other call already
+/// has. It also means Recall can stay open beside the memories on a wide screen
+/// without holding a connection open for as long as the tab is.
+///
+/// Spoken conversations are a different thing and keep their socket; see
+/// `LiveVoiceSession`.
 class AiConversation extends ChangeNotifier {
-  AiConversation(this._tokenFetch);
+  AiConversation(this._ask);
 
-  final TokenFetch _tokenFetch;
-
-  WebSocketChannel? _channel;
-  StreamSubscription<dynamic>? _sub;
+  final Ask _ask;
 
   final List<AiMessage> messages = [];
-  bool connected = false;
-  bool thinking = false;
 
-  Future<void> connect() async {
-    try {
-      final token = await _tokenFetch() ?? AppConfig.devUid;
-      final ch = WebSocketChannel.connect(AppConfig.wsLiveUri(token));
-      _sub = ch.stream.listen(
-        _onMessage,
-        onDone: () {
-          connected = false;
-          notifyListeners();
-        },
-        onError: (_) {
-          connected = false;
-          notifyListeners();
-        },
-      );
-      _channel = ch;
-      connected = true;
-      notifyListeners();
-    } catch (_) {
-      connected = false;
-      notifyListeners();
-    }
-  }
+  int _pending = 0;
+  bool _disposed = false;
 
-  void _onMessage(dynamic data) {
-    try {
-      final j = jsonDecode(data as String) as Map<String, dynamic>;
-      if (j.containsKey('error')) {
-        thinking = false;
-        notifyListeners();
-        return;
-      }
-      messages.add(AiMessage(
-        j['answer'] as String? ?? '',
-        false,
-        (j['citations'] as List? ?? const []).cast<Map<String, dynamic>>(),
-        j['journal_id'] as String? ?? '',
-        j['journal_name'] as String? ?? '',
-      ));
-      thinking = false;
-      notifyListeners();
-    } catch (_) {
-      /* ignore malformed frame */
-    }
-  }
+  /// An answer is on its way.
+  bool get thinking => _pending > 0;
 
-  /// Sends a question, optionally scoped to one journal.
+  /// Asks a question, optionally scoped to one journal.
   ///
   /// [journalId] is three-state, as on the server: null lets the question name
   /// its own journal, an empty string forces every memory, an id scopes to that
-  /// journal. No-op if empty or disconnected.
-  void send(String text, {String? journalId}) {
-    final t = text.trim();
-    if (t.isEmpty || _channel == null) return;
-    messages.add(AiMessage(t, true));
-    thinking = true;
-    _channel!.sink.add(jsonEncode({
-      'question': t,
-      if (journalId != null) 'journal_id': journalId,
-    }));
-    notifyListeners();
+  /// journal. Empty text is ignored.
+  ///
+  /// A failure becomes a turn in the conversation rather than an exception:
+  /// the question is on screen, and something has to answer it.
+  Future<void> send(String text, {String? journalId}) async {
+    final question = text.trim();
+    if (question.isEmpty) return;
+    messages.add(AiMessage(question, true));
+    _pending++;
+    _changed();
+    try {
+      final answer = await _ask(question, journalId: journalId);
+      messages.add(AiMessage(
+        answer.answer,
+        false,
+        answer.citations,
+        answer.journalId,
+        answer.journalName,
+      ));
+    } catch (_) {
+      messages.add(AiMessage(
+        'I could not reach your memories just now. Check your connection and ask again.',
+        false,
+      ));
+    } finally {
+      _pending--;
+      _changed();
+    }
+  }
+
+  void _changed() {
+    // An answer can land after the screen that asked has gone.
+    if (!_disposed) notifyListeners();
   }
 
   @override
   void dispose() {
-    _sub?.cancel();
-    _channel?.sink.close();
+    _disposed = true;
     super.dispose();
   }
 }

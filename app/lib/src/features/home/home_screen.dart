@@ -19,7 +19,12 @@ import '../shell/app_shell.dart';
 /// Home — a warm resurfacing feed: the "On This Day" keepsake, a row of
 /// milestones, and the most recent moments.
 class HomeScreen extends ConsumerWidget {
-  const HomeScreen({super.key});
+  const HomeScreen({super.key, this.header});
+
+  /// Scrolls with the feed, above it. The wide layout puts its title and the
+  /// inline composer here, so they move with the memories instead of pinning a
+  /// third of the pane.
+  final Widget? header;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -45,6 +50,10 @@ class HomeScreen extends ConsumerWidget {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(Insets.lg, Insets.md, Insets.lg, Insets.xxl),
         children: [
+          if (header != null) ...[
+            header!,
+            const SizedBox(height: Insets.xl),
+          ],
           if (showSlideshow) ...[
             memories.when(
               data: (items) => items.isEmpty

@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/tokens.dart';
 import '../../data/ai_conversation.dart';
-import '../../data/auth.dart';
+import '../../data/models.dart';
 import '../../data/providers.dart';
 import '../../widgets/immersive_chrome.dart';
 import '../../widgets/journal_picker.dart';
@@ -14,9 +14,16 @@ import 'voice_mode_screen.dart';
 
 /// Recall — talk to your memories. A back-and-forth thread you can type into,
 /// plus a mic button that opens hands-free **voice mode** (an immersive,
-/// streaming-style listening splash). Retrieval rides the `/live` channel.
+/// streaming-style listening splash).
+///
+/// Two homes. On a phone it is a full-screen route with a close button. On a
+/// wide screen it is [embedded]: a pane that stays open beside the memories,
+/// with nothing to close and nothing to go back to.
 class RecallScreen extends ConsumerStatefulWidget {
-  const RecallScreen({super.key});
+  const RecallScreen({super.key, this.embedded = false});
+
+  /// Shown as a permanent pane rather than pushed as a route.
+  final bool embedded;
 
   @override
   ConsumerState<RecallScreen> createState() => _RecallScreenState();
@@ -31,9 +38,13 @@ class _RecallScreenState extends ConsumerState<RecallScreen> {
   @override
   void initState() {
     super.initState();
-    _ai = AiConversation(ref.read(liveTokenProvider));
+    // Read at ask time, not captured now: the client is rebuilt when the
+    // account changes, and a pane that stays open must not keep the old one.
+    _ai = AiConversation(
+      (question, {journalId}) =>
+          ref.read(apiClientProvider).chat(question, journalId: journalId),
+    );
     _ai.addListener(_onUpdate);
-    _ai.connect();
   }
 
   @override
@@ -90,7 +101,9 @@ class _RecallScreenState extends ConsumerState<RecallScreen> {
 
   void _openVoiceMode() {
     FocusScope.of(context).unfocus();
-    Navigator.of(context).push(
+    // Over the whole window, from the pane too: a spoken conversation is the
+    // one thing here that wants the room to itself.
+    Navigator.of(context, rootNavigator: true).push(
       MaterialPageRoute(builder: (_) => const VoiceModeScreen(), fullscreenDialog: true),
     );
   }
@@ -125,16 +138,16 @@ class _RecallScreenState extends ConsumerState<RecallScreen> {
               children: [
                 Row(
                   children: [
-                    IconButton(
-                      icon: const Icon(Icons.close, color: Colors.white70),
-                      onPressed: () => Navigator.of(context).maybePop(),
-                    ),
+                    if (widget.embedded)
+                      const SizedBox(width: Insets.lg, height: 48)
+                    else
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.white70),
+                        onPressed: () => Navigator.of(context).maybePop(),
+                      ),
                     const Text('Recall',
                         style: TextStyle(
                             color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
-                    const Spacer(),
-                    if (!_ai.connected)
-                      TextButton(onPressed: _ai.connect, child: const Text('Reconnect')),
                   ],
                 ),
                 Padding(
@@ -173,6 +186,11 @@ class _RecallScreenState extends ConsumerState<RecallScreen> {
                 _InputBar(
                   controller: _controller,
                   focusNode: _inputFocus,
+                  // The pane is narrower than a phone held sideways; the long
+                  // version is cut off mid-word there.
+                  hint: widget.embedded
+                      ? 'Ask your memories…'
+                      : 'Ask anything about your memories…',
                   onMicTap: _openVoiceMode,
                   onSend: _send,
                 ),
@@ -196,12 +214,20 @@ class _Bubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isUser = msg.fromUser;
+    // Sized against the space the conversation actually has, not the window:
+    // in the side pane those are very different numbers.
+    return LayoutBuilder(
+      builder: (context, box) => _bubble(isUser, box.maxWidth * 0.82),
+    );
+  }
+
+  Widget _bubble(bool isUser, double maxWidth) {
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: Insets.xs),
         padding: const EdgeInsets.all(Insets.md),
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.82),
+        constraints: BoxConstraints(maxWidth: maxWidth),
         decoration: BoxDecoration(
           color: isUser ? AppColors.sage : Colors.white.withValues(alpha: 0.08),
           borderRadius: BorderRadius.only(
@@ -347,16 +373,14 @@ class _RecallHint extends StatelessWidget {
 
 class _CitationCard extends StatelessWidget {
   const _CitationCard(this.citation);
-  final Map<String, dynamic> citation;
+  final Citation citation;
 
   @override
   Widget build(BuildContext context) {
-    final id = citation['recording_id'] as String?;
-    final date = '${citation['event_date'] ?? ''}';
-    final snippet = '${citation['snippet'] ?? ''}';
-    // Absent on citations written before typed memories existed, and on those
-    // the memory was always spoken.
-    final hasAudio = (citation['source'] ?? 'voice') != 'text';
+    final id = citation.recordingId.isEmpty ? null : citation.recordingId;
+    final date = citation.eventDate;
+    final snippet = citation.snippet;
+    final hasAudio = citation.hasAudio;
     return Material(
       color: Colors.white.withValues(alpha: 0.06),
       borderRadius: BorderRadius.circular(Radii.sm),
@@ -415,12 +439,14 @@ class _InputBar extends StatelessWidget {
   const _InputBar({
     required this.controller,
     required this.focusNode,
+    required this.hint,
     required this.onMicTap,
     required this.onSend,
   });
 
   final TextEditingController controller;
   final FocusNode focusNode;
+  final String hint;
   final VoidCallback onMicTap;
   final VoidCallback onSend;
 
@@ -459,7 +485,7 @@ class _InputBar extends StatelessWidget {
               textInputAction: TextInputAction.send,
               onSubmitted: (_) => onSend(),
               decoration: InputDecoration(
-                hintText: 'Ask anything about your memories…',
+                hintText: hint,
                 hintStyle: const TextStyle(color: Colors.white38),
                 filled: true,
                 fillColor: Colors.white.withValues(alpha: 0.08),

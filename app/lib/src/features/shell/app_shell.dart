@@ -11,6 +11,7 @@ import '../menu/app_menu_drawer.dart';
 import '../recall/recall_screen.dart';
 import '../record/record_screen.dart';
 import '../settings/settings_screen.dart';
+import 'wide_shell.dart';
 
 /// Opens the record screen and, once something has been captured, refreshes the
 /// feed.
@@ -21,12 +22,15 @@ import '../settings/settings_screen.dart';
 /// It used to end by asking the user to create an account, because until then
 /// their memories lived on the phone alone. Nothing reaches this screen without
 /// an account any more, so there is nothing left to ask.
-Future<void> openRecordScreen(BuildContext context, WidgetRef ref) async {
+Future<void> openRecordScreen(BuildContext context, WidgetRef ref, {bool voice = false}) async {
   // Don't let a playing memory bleed into the new recording.
   await ref.read(audioPlaybackProvider.notifier).stop();
   if (!context.mounted) return;
   final created = await Navigator.of(context).push<bool>(
-    MaterialPageRoute(builder: (_) => const RecordScreen(), fullscreenDialog: true),
+    MaterialPageRoute(
+      builder: (_) => RecordScreen(startInVoice: voice),
+      fullscreenDialog: true,
+    ),
   );
   if (created != true) return;
 
@@ -38,6 +42,12 @@ Future<void> openRecordScreen(BuildContext context, WidgetRef ref) async {
 /// **Record** and **Recall** — live in the bottom dock. Recall itself offers
 /// both voice and typed input, so there's no separate chat entry. Everything
 /// else lives in the menu.
+///
+/// That is the phone's layout, and on a phone-sized window it is unchanged. On
+/// a wide one the same screens are arranged as three panes instead — see
+/// [WideShell] — because a layout built for a thumb, stretched across a
+/// monitor, hides nine destinations behind a menu and spends the rest of the
+/// width on two enormous buttons.
 class AppShell extends ConsumerWidget {
   const AppShell({super.key});
 
@@ -51,6 +61,13 @@ class AppShell extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    return LayoutBuilder(
+      builder: (context, box) =>
+          box.maxWidth >= WideShell.breakpoint ? const WideShell() : _phone(context, ref),
+    );
+  }
+
+  Widget _phone(BuildContext context, WidgetRef ref) {
     return Scaffold(
       drawer: const AppMenuDrawer(),
       appBar: AppBar(

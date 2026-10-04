@@ -74,7 +74,8 @@ class DraftStore {
     _dirty = false;
   }
 
-  /// Test seam: what would be restored right now.
-  @visibleForTesting
+  /// The draft as it stands, without a read: empty until [load] has run or
+  /// something has been typed. For a field that needs to catch up after the
+  /// draft was edited, or saved and cleared, somewhere else.
   static String get current => _text ?? '';
 }
