@@ -16,21 +16,43 @@ import { navigate } from "../router";
 
 export function UserDetail({ uid }: { uid: string }) {
   const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const detail = useAsync(() => api.user(uid), [uid]);
 
   if (detail.error) return <ErrorBox error={detail.error} />;
   if (detail.loading || !detail.data) return <Loading />;
 
-  const { user, devices, recent_recordings, previous_uids, note } = detail.data;
+  const { user, note } = detail.data;
+  // Defaulted rather than trusted: this page once went blank because it read a
+  // list the API had stopped sending. A missing list is an empty one.
+  const devices = detail.data.devices ?? [];
+  const recent_recordings = detail.data.recent_recordings ?? [];
+  const isPro = user.tier === "premium";
 
   async function run(action: () => Promise<unknown>) {
     setBusy(true);
+    setActionError(null);
     try {
       await action();
       detail.reload();
+    } catch (e) {
+      // Said on the page: a button that does nothing when it fails looks the
+      // same as one that worked.
+      setActionError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
+  }
+
+  async function setPlan(pro: boolean) {
+    const who = user.email || user.uid;
+    const ok = window.confirm(
+      pro
+        ? `Upgrade ${who} to the Pro plan?\n\nThe higher limits apply from their next request. Nothing is charged — this is a manual grant.`
+        : `Move ${who} back to the Free plan?\n\nNothing they have recorded is removed, but the free limits apply from their next request.`,
+    );
+    if (!ok) return;
+    await run(() => api.setUser(uid, { tier: pro ? "premium" : "free" }));
   }
 
   async function purge() {
@@ -49,7 +71,10 @@ export function UserDetail({ uid }: { uid: string }) {
       <p className="small">
         <a onClick={() => navigate("/users")}>← People</a>
       </p>
-      <h1>{displayName(user)}</h1>
+      <h1>
+        {displayName(user)}{" "}
+        <span className={`pill ${isPro ? "premium" : ""}`}>{isPro ? "Pro" : "Free"}</span>
+      </h1>
       <p className="muted mono small">{user.uid}</p>
 
       <div className="grid">
@@ -83,41 +108,46 @@ export function UserDetail({ uid }: { uid: string }) {
             </Row>
             <Row label="Name">{user.preferred_name || <span className="muted">—</span>}</Row>
             <Row label="Joined">{fmtDate(user.created_at)}</Row>
+            <Row label="First recording">{fmtWhen(user.first_recorded_at)}</Row>
+            <Row label="Latest recording">{fmtWhen(user.last_recording_at)}</Row>
             <Row label="Platform">
               {user.platform || "—"} {user.app_version ? `· ${user.app_version}` : ""}
             </Row>
             <Row label="Reports">{user.feedback_count}</Row>
-            {previous_uids.length ? (
-              <Row label="Previous uids">
-                <span className="mono small">{previous_uids.join(", ")}</span>
-                <div className="muted small">
-                  Signing back in moves an account onto a new uid and deletes the old one, so this
-                  is the only record that it existed.
-                </div>
-              </Row>
-            ) : null}
             {note ? <Row label="Note">{note}</Row> : null}
           </tbody>
         </table>
       </div>
 
       <div className="card section">
-        <h2>Tier</h2>
+        <h2>Plan</h2>
         <p className="muted small">
-          Set by hand. Nothing in the app enforces a limit yet, so this is a label rather than an
-          entitlement.
+          Granted by hand — there is no purchase flow yet. Pro lifts the Free plan's limits on
+          recording length, voice memories per month, typed-memory length and journals, and the
+          server enforces whichever plan is set here from the user's next request. Pro is stored
+          as the <span className="mono">premium</span> tier.
         </p>
         <div className="toolbar">
-          <span className={`pill ${user.tier === "premium" ? "premium" : ""}`}>{user.tier}</span>
+          <span className={`pill ${isPro ? "premium" : ""}`}>{isPro ? "Pro" : "Free"}</span>
           <button
             disabled={busy}
-            className={user.tier === "premium" ? "" : "primary"}
-            onClick={() =>
-              run(() => api.setUser(uid, { tier: user.tier === "premium" ? "free" : "premium" }))
-            }
+            className={isPro ? "" : "primary"}
+            onClick={() => setPlan(!isPro)}
           >
-            {user.tier === "premium" ? "Move to free" : "Make premium"}
+            {isPro ? "Move back to Free" : "Upgrade to Pro"}
           </button>
+        </div>
+        {actionError ? <p className="error small">{actionError}</p> : null}
+        {detail.data.tier_updated_by ? (
+          <p className="muted small">
+            Last changed by {detail.data.tier_updated_by} {fmtWhen(detail.data.tier_updated_at)}.
+          </p>
+        ) : null}
+      </div>
+
+      <div className="card section">
+        <h2>Maintenance</h2>
+        <div className="toolbar">
           <button disabled={busy} onClick={() => run(() => api.recomputeStats(uid))}>
             Recompute counters
           </button>
@@ -125,11 +155,6 @@ export function UserDetail({ uid }: { uid: string }) {
             Delete account…
           </button>
         </div>
-        {detail.data.tier_updated_by ? (
-          <p className="muted small">
-            Last changed by {detail.data.tier_updated_by} {fmtWhen(detail.data.tier_updated_at)}.
-          </p>
-        ) : null}
       </div>
 
       <div className="section">

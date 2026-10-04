@@ -66,7 +66,6 @@ export interface UserDetail {
   note: string;
   tier_updated_at: string | null;
   tier_updated_by: string;
-  previous_uids: string[];
   devices: DeviceInfo[];
   recent_recordings: RecordingRow[];
 }

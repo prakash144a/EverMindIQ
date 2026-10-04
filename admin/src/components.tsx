@@ -1,7 +1,7 @@
 /** Small shared pieces: formatting, stat tiles, tables, and async state. */
 
-import type { ReactNode } from "react";
-import { useEffect, useState } from "react";
+import type { ErrorInfo, ReactNode } from "react";
+import { Component, useEffect, useState } from "react";
 import { ApiError } from "./api";
 
 export function fmtDuration(seconds: number): string {
@@ -120,4 +120,48 @@ export function StatusPill({ status }: { status: string }) {
   const tone =
     status === "indexed" ? "ok" : status === "failed" ? "bad" : status === "new" ? "warn" : "";
   return <span className={`pill ${tone}`}>{status}</span>;
+}
+
+/**
+ * Catches a page that throws while rendering.
+ *
+ * Without one, React unmounts the whole tree and the operator is left looking
+ * at a blank page with the explanation in a console nobody has open — which is
+ * exactly how the user-detail page failed. `resetKey` is the route, so
+ * navigating away clears the error instead of leaving it stuck on screen.
+ */
+export class ErrorBoundary extends Component<
+  { resetKey: string; children: ReactNode },
+  { error: Error | null; key: string }
+> {
+  state = { error: null as Error | null, key: this.props.resetKey };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  static getDerivedStateFromProps(
+    props: { resetKey: string },
+    state: { error: Error | null; key: string },
+  ) {
+    return props.resetKey === state.key ? null : { error: null, key: props.resetKey };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("page crashed", error, info.componentStack);
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="card">
+        <h2>This page could not be shown</h2>
+        <p className="error">{this.state.error.message}</p>
+        <p className="muted small">
+          The console hit a bug while drawing this page. Nothing was changed. The details are in
+          the browser console.
+        </p>
+      </div>
+    );
+  }
 }

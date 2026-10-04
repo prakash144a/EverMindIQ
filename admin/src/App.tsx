@@ -7,6 +7,7 @@ import { UserDetail } from "./pages/UserDetail";
 import { DeviceDetail, Devices } from "./pages/Devices";
 import { Feedback } from "./pages/Feedback";
 import { Health } from "./pages/Health";
+import { ErrorBoundary } from "./components";
 import { navigate, param, useRoute } from "./router";
 
 const NAV = [
@@ -99,7 +100,9 @@ export function App() {
         <button onClick={() => signOutAdmin()}>Sign out</button>
       </nav>
       <main>
-        <Page route={route} />
+        <ErrorBoundary resetKey={route}>
+          <Page route={route} />
+        </ErrorBoundary>
       </main>
     </div>
   );

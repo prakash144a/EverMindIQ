@@ -85,7 +85,7 @@ export function Users() {
         >
           <option value="">All tiers</option>
           <option value="free">Free</option>
-          <option value="premium">Premium</option>
+          <option value="premium">Pro</option>
         </select>
       </div>
 
@@ -124,7 +124,7 @@ export function Users() {
                 <td className="mono">{u.install_id ? u.install_id.slice(0, 12) : "—"}</td>
                 <td>
                   {u.tier === "premium" ? (
-                    <span className="pill premium">premium</span>
+                    <span className="pill premium">Pro</span>
                   ) : (
                     <span className="pill">free</span>
                   )}
