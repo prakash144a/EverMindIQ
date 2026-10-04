@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:voiceiq/src/core/draft_store.dart';
 import 'package:voiceiq/src/core/theme.dart';
 import 'package:voiceiq/src/data/api_client.dart';
 import 'package:voiceiq/src/data/providers.dart';
@@ -16,7 +17,12 @@ import 'package:voiceiq/src/features/record/record_screen.dart';
 void main() {
   late List<http.BaseRequest> sent;
 
-  setUp(() => sent = []);
+  setUp(() {
+    sent = [];
+    // The draft is process-wide, as it has to be to outlive the screen. Start
+    // each test with none, or one test's typing opens in the next one's field.
+    DraftStore.setForTesting('');
+  });
 
   Future<void> pumpRecord(
     WidgetTester tester, {
@@ -168,5 +174,57 @@ void main() {
 
     expect(find.byType(TextField), findsNothing);
     expect(find.text('Tap the mic to start recording'), findsOneWidget);
+  });
+
+  group('the draft', () {
+    testWidgets('what is typed is kept before it is ever saved', (tester) async {
+      await pumpRecord(tester);
+
+      await tester.enterText(find.byType(TextField), 'Appa told the story about the bicycle');
+      await tester.pump();
+
+      expect(DraftStore.current, 'Appa told the story about the bicycle');
+      expect(sent.any((r) => r.url.path == '/recordings/text'), isFalse);
+    });
+
+    testWidgets('coming back to the screen finds it where it was left', (tester) async {
+      DraftStore.setForTesting('Half a sentence, written yesterday');
+      await pumpRecord(tester);
+
+      expect(find.text('Half a sentence, written yesterday'), findsOneWidget);
+    });
+
+    testWidgets('saving the memory clears the draft', (tester) async {
+      await pumpRecord(tester);
+
+      await tester.enterText(find.byType(TextField), 'We drove to the coast at sunrise.');
+      await tester.pump();
+      await tester.tap(find.text('Save memory'));
+      await tester.pumpAndSettle();
+
+      expect(DraftStore.current, isEmpty);
+    });
+
+    testWidgets('a save that fails leaves the draft alone', (tester) async {
+      await pumpRecord(tester, saveFails: true);
+
+      await tester.enterText(find.byType(TextField), 'Too precious to lose to an error.');
+      await tester.pump();
+      await tester.tap(find.text('Save memory'));
+      await tester.pumpAndSettle();
+
+      expect(DraftStore.current, 'Too precious to lose to an error.');
+    });
+
+    testWidgets('deleting everything leaves no draft behind', (tester) async {
+      await pumpRecord(tester);
+
+      await tester.enterText(find.byType(TextField), 'Never mind');
+      await tester.pump();
+      await tester.enterText(find.byType(TextField), '');
+      await tester.pump();
+
+      expect(DraftStore.current, isEmpty);
+    });
   });
 }

@@ -9,6 +9,7 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
+import '../../core/draft_store.dart';
 import '../../core/tokens.dart';
 import '../../data/api_client.dart';
 import '../../data/models.dart';
@@ -64,8 +65,26 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
   @override
   void initState() {
     super.initState();
-    // Drives the character counter and the Save button's enabled state.
-    _textCtl.addListener(() => setState(() {}));
+    // Drives the character counter and the Save button's enabled state — and
+    // keeps the draft, so what has been typed outlives this screen.
+    _textCtl.addListener(() {
+      DraftStore.save(_textCtl.text);
+      setState(() {});
+    });
+    _restoreDraft();
+  }
+
+  /// Put back whatever was being written the last time this screen was open.
+  ///
+  /// Only into an empty field: if someone has already started typing in the
+  /// moment the read took, what they are typing now wins.
+  Future<void> _restoreDraft() async {
+    final draft = await DraftStore.load();
+    if (!mounted || draft.isEmpty || _textCtl.text.isNotEmpty) return;
+    _textCtl.value = TextEditingValue(
+      text: draft,
+      selection: TextSelection.collapsed(offset: draft.length),
+    );
   }
 
   /// The caller's entitlements, falling back to the free tier until the profile
@@ -185,6 +204,10 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
             eventDate: _isToday(_eventDate) ? null : _eventDate,
             journalId: _journalId,
           );
+      // Only now: a save that failed leaves the draft exactly where it was.
+      // Not awaited — the draft is forgotten the moment this is called, and
+      // leaving the screen should not wait on a best-effort disk write.
+      unawaited(DraftStore.clear());
       if (mounted) Navigator.of(context).pop(true);
     } catch (e) {
       setState(() {
@@ -385,6 +408,14 @@ class _RecordScreenState extends ConsumerState<RecordScreen> {
               ),
             ),
           ),
+          if (_textCtl.text.trim().isNotEmpty && !saving)
+            const Padding(
+              padding: EdgeInsets.only(top: Insets.xs),
+              child: Text(
+                'Draft kept on this device until you save.',
+                style: TextStyle(color: Colors.white54, fontSize: 12),
+              ),
+            ),
           if (_error != null) _errorText(),
           const SizedBox(height: Insets.md),
           FilledButton.icon(

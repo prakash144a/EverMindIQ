@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/config.dart';
 import '../core/dev_auth.dart';
+import '../core/draft_store.dart';
 import '../core/session_store.dart';
 import 'api_client.dart';
 import 'models.dart';
@@ -114,6 +115,9 @@ class AuthController extends Notifier<AuthState> {
   Future<void> _forget() async {
     await SessionStore.clear();
     await DevAuth.clear();
+    // A shared phone must not hand the next person the last person's
+    // unfinished sentence.
+    await DraftStore.clear();
     try {
       await ref.read(firebaseAuthProvider).signOut();
     } catch (_) {/* best effort; the session id is already gone */}
