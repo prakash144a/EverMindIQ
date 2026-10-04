@@ -287,10 +287,15 @@ class VerifyResult {
   final String ticket;
   final DeviceSessionInfo? activeSession;
 
+  /// The account has no name yet, so ask for one before claiming the session.
+  /// False for anyone who has answered before — a second device never re-asks.
+  final bool needsName;
+
   const VerifyResult({
     required this.status,
     required this.ticket,
     this.activeSession,
+    this.needsName = false,
   });
 
   bool get isNewAccount => status == 'signed_up';
@@ -302,6 +307,7 @@ class VerifyResult {
       status: asText(j['status']),
       ticket: asText(j['ticket']),
       activeSession: held == null ? null : DeviceSessionInfo.fromJson(held),
+      needsName: j['needs_name'] == true,
     );
   }
 }

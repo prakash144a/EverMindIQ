@@ -412,3 +412,67 @@ def test_guessing_someone_elses_code_fails(client, make_text_memory):
 @pytest.mark.parametrize("field", ["ticket"])
 def test_the_claim_needs_its_ticket(client, field):
     assert client.post("/auth/session", json={}).status_code == 422
+
+
+# -- what to call them --------------------------------------------------
+#
+# The name is asked for after the code, and only when the account has none.
+# Someone signing in on a second device has already answered it.
+
+
+def test_a_new_address_is_asked_for_a_name(client):
+    request_code(client, "new@example.com")
+    assert verify(client, "new@example.com").json()["needs_name"] is True
+
+
+def test_the_name_given_with_the_claim_is_kept(client):
+    request_code(client, "new@example.com")
+    ticket = verify(client, "new@example.com").json()["ticket"]
+
+    claimed = client.post(
+        "/auth/session", json={"ticket": ticket, "preferred_name": "  Prakash  "}
+    ).json()
+
+    assert claimed["profile"]["preferred_name"] == "Prakash"
+    profile = client.get("/profile", headers=signed_in(claimed)).json()
+    assert profile["preferred_name"] == "Prakash"
+
+
+def test_a_named_account_is_not_asked_again_on_another_device(client):
+    log_in(client, "p@example.com", install_id="phone-a", name="Prakash")
+
+    request_code(client, "p@example.com", install_id="browser-a", platform="web")
+    body = verify(client, "p@example.com", install_id="browser-a", platform="web").json()
+
+    assert body["needs_name"] is False
+
+
+def test_signing_in_cannot_rename_an_account_that_has_a_name(client):
+    first = log_in(client, "p@example.com", name="Prakash")
+    client.post("/auth/logout", headers=signed_in(first))
+
+    request_code(client, "p@example.com")
+    ticket = verify(client, "p@example.com").json()["ticket"]
+    claimed = client.post(
+        "/auth/session", json={"ticket": ticket, "preferred_name": "Someone Else"}
+    ).json()
+
+    assert claimed["profile"]["preferred_name"] == "Prakash"
+
+
+def test_an_account_left_unnamed_is_asked_again_next_time(client):
+    """Walking away from the question must not mean never being asked."""
+    first = log_in(client, "p@example.com")  # no name given
+    client.post("/auth/logout", headers=signed_in(first))
+
+    request_code(client, "p@example.com")
+    body = verify(client, "p@example.com").json()
+
+    assert body["status"] == "signed_in"
+    assert body["needs_name"] is True
+
+
+def test_the_name_can_still_be_changed_from_the_profile(client):
+    body = log_in(client, "p@example.com", name="Prakash")
+    client.patch("/profile", json={"preferred_name": "PK"}, headers=signed_in(body))
+    assert client.get("/profile", headers=signed_in(body)).json()["preferred_name"] == "PK"

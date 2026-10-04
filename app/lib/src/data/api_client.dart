@@ -224,19 +224,11 @@ class ApiClient {
   }
 
   /// Check the code. Returns a ticket, and whatever stands in the way of it.
-  Future<VerifyResult> verifyOtp({
-    required String email,
-    required String code,
-    String preferredName = '',
-  }) async {
+  Future<VerifyResult> verifyOtp({required String email, required String code}) async {
     final r = await _client.post(
       _u('/auth/otp/verify'),
       headers: await _headers(),
-      body: jsonEncode({
-        'email': email,
-        'code': code,
-        'preferred_name': preferredName,
-      }),
+      body: jsonEncode({'email': email, 'code': code}),
     );
     if (r.statusCode != 200) _fail(r);
     return VerifyResult.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
@@ -247,11 +239,22 @@ class ApiClient {
   /// Throws [SessionInUseException] when the account is open elsewhere and
   /// [takeover] was not given — the caller is expected to ask the person, not
   /// to retry silently.
-  Future<SignInResult> claimSession(String ticket, {bool takeover = false}) async {
+  ///
+  /// [preferredName] is what to call the person, sent only when the verify step
+  /// said the account had no name. The server ignores it for one that does.
+  Future<SignInResult> claimSession(
+    String ticket, {
+    bool takeover = false,
+    String preferredName = '',
+  }) async {
     final r = await _client.post(
       _u('/auth/session'),
       headers: await _headers(),
-      body: jsonEncode({'ticket': ticket, 'takeover': takeover}),
+      body: jsonEncode({
+        'ticket': ticket,
+        'takeover': takeover,
+        if (preferredName.isNotEmpty) 'preferred_name': preferredName,
+      }),
     );
     if (r.statusCode == 409) {
       final held = _detail(r)?['active_session'];

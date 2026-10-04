@@ -124,7 +124,7 @@ class ProfileScreen extends ConsumerWidget {
             const SizedBox(height: Insets.lg),
             Text(
               'Your memories are tied to this email, not to this phone. Sign in '
-              'with it on any device to open them there — one device at a time.',
+              'with it on any device to open them there — one phone and one browser at a time.',
               style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: Insets.xl),

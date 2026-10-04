@@ -51,6 +51,7 @@ void main() {
   Future<void> pumpLogin(
     WidgetTester tester, {
     bool heldElsewhere = false,
+    bool needsName = false,
     int otpStatus = 204,
     SessionEndedException? notice,
   }) async {
@@ -70,8 +71,9 @@ void main() {
         case '/auth/otp/verify':
           return http.Response(
             jsonEncode({
-              'status': 'signed_in',
+              'status': needsName ? 'signed_up' : 'signed_in',
               'ticket': 'tkt_1',
+              'needs_name': needsName,
               if (heldElsewhere) 'active_session': otherDevice,
             }),
             200,
@@ -159,6 +161,63 @@ void main() {
 
       expect(find.textContaining('Please wait 42s'), findsOneWidget);
       expect(find.textContaining('We emailed a six-digit code'), findsNothing);
+    });
+  });
+
+  group('what to call them', () {
+    testWidgets('the first screen asks for an email and nothing else', (tester) async {
+      await pumpLogin(tester);
+
+      expect(find.byType(TextField), findsOneWidget);
+      expect(find.text('What should we call you?'), findsNothing);
+    });
+
+    testWidgets('someone with an account is let straight in, never asked', (tester) async {
+      await pumpLogin(tester);
+      await enterEmail(tester);
+      await enterCode(tester);
+
+      expect(find.text('What should we call you?'), findsNothing);
+      expect(jsonDecode(posted(sent, '/auth/otp/verify').body),
+          {'email': 'p@example.com', 'code': '123456'});
+      expect(auth.signedIn?.sessionId, 'ses_1');
+    });
+
+    testWidgets('a new account is asked after the code, and the name goes with the claim',
+        (tester) async {
+      await pumpLogin(tester, needsName: true);
+      await enterEmail(tester);
+      await enterCode(tester);
+
+      // Asked, and not signed in until answered.
+      expect(find.text('What should we call you?'), findsOneWidget);
+      expect(auth.signedIn, isNull);
+
+      await tester.enterText(find.byType(TextField).first, 'Prakash');
+      await tester.tap(find.text('Continue'));
+      await tick(tester);
+
+      expect(jsonDecode(posted(sent, '/auth/session').body), {
+        'ticket': 'tkt_1',
+        'takeover': false,
+        'preferred_name': 'Prakash',
+      });
+      expect(auth.signedIn?.sessionId, 'ses_1');
+    });
+
+    testWidgets('the question can be skipped', (tester) async {
+      await pumpLogin(tester, needsName: true);
+      await enterEmail(tester);
+      await enterCode(tester);
+
+      await tester.tap(find.text('Skip for now'));
+      await tick(tester);
+
+      expect(jsonDecode(posted(sent, '/auth/session').body), {
+        'ticket': 'tkt_1',
+        'takeover': false,
+      });
+      expect(auth.signedIn?.sessionId, 'ses_1');
     });
   });
 

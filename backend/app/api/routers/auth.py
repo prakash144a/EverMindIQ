@@ -69,6 +69,9 @@ class OtpRequest(BaseModel):
 class OtpVerify(BaseModel):
     email: str = Field(..., max_length=254)
     code: str = Field(..., max_length=12)
+    # Older app builds asked for the name on the first screen and send it here.
+    # Current ones ask after the code, only when `needs_name`, and send it with
+    # the claim instead. Kept so an installed app does not break.
     preferred_name: str = Field(default="", max_length=80)
 
 
@@ -103,6 +106,11 @@ class VerifyResponse(BaseModel):
     # Set when another device holds this account: the caller must confirm the
     # takeover before a session is issued. Null means nothing is in the way.
     active_session: SessionView | None = None
+    # The account has no name to greet its owner by, so the app should ask for
+    # one before claiming the session. True for a new address, and for one whose
+    # owner walked away before answering last time. An account that has a name
+    # is never asked again at the door — that is what the profile screen is for.
+    needs_name: bool = False
 
 
 class ClaimRequest(BaseModel):
@@ -110,6 +118,10 @@ class ClaimRequest(BaseModel):
     # Deliberately explicit and defaulting to false: signing someone out is not
     # something to do as a side effect of a client forgetting a field.
     takeover: bool = False
+    # What to call the person, asked after the code when the account has no name
+    # yet. Ignored for an account that already has one: signing in is not a way
+    # to rename yourself, and a stale form field must not be able to do it.
+    preferred_name: str = Field(default="", max_length=80)
 
 
 class ClaimResponse(BaseModel):
@@ -214,9 +226,11 @@ def verify_otp(
     # account is no obstacle to opening the web app, and asking about it would
     # invite someone to sign their own phone out for no reason.
     held = repo.get_session(uid, surface_for(x_platform or ""))
+    profile = repo.get_profile(uid)
     return VerifyResponse(
         status="signed_up" if is_new else "signed_in",
         ticket=ticket.ticket,
+        needs_name=not (profile and profile.preferred_name.strip()),
         # Its own device signing in again is not something to ask about.
         active_session=(
             SessionView.of(held) if held and held.install_id != install_id else None
@@ -269,7 +283,7 @@ def claim_session(body: ClaimRequest) -> ClaimResponse:
             signed_in_at=now,
         ),
     )
-    profile = repo.get_profile(ticket.uid)
+    profile = _name_if_unnamed(repo, ticket, body.preferred_name, now)
     log.info("session opened for %s on %s", ticket.uid, session.platform or "unknown")
     return ClaimResponse(
         uid=ticket.uid,
@@ -330,6 +344,25 @@ def patch_profile(
     repo.save_profile(user.uid, profile)
     _sync_stats_quietly(repo, user.uid, profile)
     return _view(repo, user.uid, profile)
+
+
+def _name_if_unnamed(repo, ticket: LoginTicket, name: str, now: datetime) -> UserProfile | None:
+    """Give the account the name asked for at sign-in, if it has none yet.
+
+    Only ever fills a blank. The app asks this question when `verify` said the
+    account had no name; an account that has one keeps it whatever the claim
+    carries, and renaming goes through the profile.
+    """
+    profile = repo.get_profile(ticket.uid)
+    name = name.strip()
+    if not name or (profile and profile.preferred_name.strip()):
+        return profile
+    profile = profile or UserProfile(email=ticket.email, email_verified=True)
+    profile.preferred_name = name
+    profile.updated_at = now
+    repo.save_profile(ticket.uid, profile)
+    _sync_stats_quietly(repo, ticket.uid, profile)
+    return profile
 
 
 def _create_account(repo, email: str, preferred_name: str, now: datetime) -> str:

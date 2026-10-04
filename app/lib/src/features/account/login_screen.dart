@@ -11,7 +11,12 @@ import '../../data/auth.dart';
 import '../../data/models.dart';
 import '../../data/providers.dart';
 
-/// The way in. Email, then the code that proves it is yours.
+/// The way in. Email, then the code that proves it is yours — and, the first
+/// time only, what to call you.
+///
+/// The name is asked *after* the code because only then do we know whether to
+/// ask at all: an address with a named account is simply let in, on any device,
+/// and the name is changed from the profile rather than at the door.
 ///
 /// There is no password and no "continue without an account": the memories
 /// belong to an address, not to a phone, which is what lets someone open them
@@ -27,7 +32,7 @@ class LoginScreen extends ConsumerStatefulWidget {
   ConsumerState<LoginScreen> createState() => _LoginScreenState();
 }
 
-enum _Step { email, code }
+enum _Step { email, code, name }
 
 class _LoginScreenState extends ConsumerState<LoginScreen> {
   static const _resendCooldown = Duration(seconds: 60);
@@ -40,9 +45,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   bool _busy = false;
   String? _error;
 
-  /// Asked for on first sign-up only — an address the server already knows
-  /// brings its own name back.
   bool _isNewAccount = false;
+
+  /// The verified code, held while the name is asked for. Its ticket is good
+  /// for a few minutes, which is plenty to type a name.
+  VerifyResult? _verified;
 
   Timer? _ticker;
   int _secondsLeft = 0;
@@ -114,13 +121,47 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       _error = null;
     });
     try {
-      final verified = await _api.verifyOtp(
-        email: _email.text.trim(),
-        code: code,
-        preferredName: _name.text.trim(),
-      );
+      final verified = await _api.verifyOtp(email: _email.text.trim(), code: code);
       _isNewAccount = verified.isNewAccount;
+      _verified = verified;
 
+      // An account nobody has named yet: ask, then come back through [_enter].
+      if (verified.needsName) {
+        if (mounted) {
+          setState(() {
+            _step = _Step.name;
+            _busy = false;
+          });
+        }
+        return;
+      }
+      await _enter(verified);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _error = _friendly(e, 'Could not verify that code');
+        });
+      }
+    }
+  }
+
+  /// From the name step: carry on in, with whatever was typed. An empty name is
+  /// allowed — the question comes back next sign-in, and the profile has it too.
+  Future<void> _submitName() async {
+    final verified = _verified;
+    if (verified == null) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    await _enter(verified);
+  }
+
+  /// Spend a verified code for a session, asking first if that signs another
+  /// device out.
+  Future<void> _enter(VerifyResult verified) async {
+    try {
       // Nothing in the way: straight in. Something in the way: ask, because
       // signing someone else's phone out is their decision, not ours.
       if (verified.needsTakeover) {
@@ -142,7 +183,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       if (mounted) {
         setState(() {
           _busy = false;
-          _error = _friendly(e, 'Could not verify that code');
+          _error = _friendly(e, 'Could not sign you in');
         });
       }
     }
@@ -152,7 +193,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   Future<void> _claim(String ticket, {required bool takeover}) async {
     _lastTicket = ticket;
-    final session = await _api.claimSession(ticket, takeover: takeover);
+    final session = await _api.claimSession(
+      ticket,
+      takeover: takeover,
+      preferredName: _name.text.trim(),
+    );
     await ref.read(authControllerProvider.notifier).signIn(session);
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -233,14 +278,20 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             ),
             const SizedBox(height: Insets.sm),
             Text(
-              _step == _Step.email
-                  ? 'Sign in with your email. No password to remember.'
-                  : 'We emailed a six-digit code to ${_email.text.trim()}.',
+              switch (_step) {
+                _Step.email => 'Sign in with your email. No password to remember.',
+                _Step.code => 'We emailed a six-digit code to ${_email.text.trim()}.',
+                _Step.name => 'You are in. One last thing before your memories.',
+              },
               textAlign: TextAlign.center,
               style: TextStyle(color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: Insets.xxl),
-            if (_step == _Step.email) ..._emailStep(scheme) else ..._codeStep(scheme),
+            ...switch (_step) {
+              _Step.email => _emailStep(scheme),
+              _Step.code => _codeStep(scheme),
+              _Step.name => _nameStep(scheme),
+            },
             if (_error != null) ...[
               const SizedBox(height: Insets.md),
               Text(_error!, textAlign: TextAlign.center, style: TextStyle(color: scheme.error)),
@@ -248,7 +299,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             const SizedBox(height: Insets.xl),
             Text(
               'We only use your email to send the code and to find your memories '
-              'again — one account, on one device at a time.',
+              'again — one account, on your phone and in your browser.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
             ),
@@ -272,17 +323,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           ),
           onSubmitted: (_) => _send(),
         ),
-        const SizedBox(height: Insets.md),
-        TextField(
-          controller: _name,
-          enabled: !_busy,
-          textCapitalization: TextCapitalization.words,
-          decoration: const InputDecoration(
-            labelText: 'What should we call you?',
-            helperText: 'Only used if this is a new account.',
-            border: OutlineInputBorder(),
-          ),
-        ),
         const SizedBox(height: Insets.xl),
         FilledButton.icon(
           onPressed: _busy ? null : () => _send(),
@@ -291,6 +331,41 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
               : const Icon(Icons.mail_outline),
           label: Text(_busy ? 'Sending…' : 'Email me a code'),
+        ),
+      ];
+
+  List<Widget> _nameStep(ColorScheme scheme) => [
+        TextField(
+          controller: _name,
+          enabled: !_busy,
+          autofocus: true,
+          textCapitalization: TextCapitalization.words,
+          inputFormatters: [LengthLimitingTextInputFormatter(80)],
+          decoration: const InputDecoration(
+            labelText: 'What should we call you?',
+            helperText: 'You can change this any time from your profile.',
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (_) => _submitName(),
+        ),
+        const SizedBox(height: Insets.xl),
+        FilledButton.icon(
+          onPressed: _busy ? null : _submitName,
+          icon: _busy
+              ? const SizedBox(
+                  width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+              : const Icon(Icons.arrow_forward),
+          label: Text(_busy ? 'Signing in…' : 'Continue'),
+        ),
+        const SizedBox(height: Insets.sm),
+        TextButton(
+          onPressed: _busy
+              ? null
+              : () {
+                  _name.clear();
+                  _submitName();
+                },
+          child: const Text('Skip for now'),
         ),
       ];
 
@@ -330,6 +405,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     _step = _Step.email;
                     _error = null;
                     _code.clear();
+                    _name.clear();
+                    _verified = null;
                   }),
           child: const Text('Use a different email'),
         ),
@@ -376,8 +453,8 @@ class _SignedOutNotice extends StatelessWidget {
             notice.wasReplaced && replaced != null
                 ? 'Your account was opened on ${replaced.device}'
                     '${when == null ? '' : ' on ${_stamp(when)}'}. '
-                    'Only one device can be signed in at a time — sign in again '
-                    'here to bring it back.'
+                    'One phone and one browser can be signed in at a time — sign '
+                    'in again here to bring it back.'
                 : 'Sign in to open your memories again.',
             style: TextStyle(color: scheme.onSurfaceVariant),
           ),
