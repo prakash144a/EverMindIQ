@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/config.dart';
+import '../../core/open_link.dart';
 import '../../core/tokens.dart';
 import '../../data/api_client.dart';
 import '../../data/auth.dart';
@@ -297,6 +298,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               Text(_error!, textAlign: TextAlign.center, style: TextStyle(color: scheme.error)),
             ],
             const SizedBox(height: Insets.xl),
+            _Agreement(onOpen: _open),
+            const SizedBox(height: Insets.md),
             Text(
               'We only use your email to send the code and to find your memories '
               'again — one account, on your phone and in your browser.',
@@ -305,6 +308,25 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// Open a document in the browser, or — where the build cannot — show its
+  /// address so it can still be read before agreeing to it.
+  void _open(String title, String url) {
+    if (openLink(url)) return;
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: SelectableText('Read it at:\n\n$url'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Close'),
+          ),
+        ],
       ),
     );
   }
@@ -411,6 +433,44 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           child: const Text('Use a different email'),
         ),
       ];
+}
+
+/// What signing in agrees to, with both documents one tap away.
+///
+/// On every step rather than only the first: someone creating an account passes
+/// through all three, and the sentence should be in view when they finish.
+class _Agreement extends StatelessWidget {
+  const _Agreement({required this.onOpen});
+
+  final void Function(String title, String url) onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final plain = TextStyle(fontSize: 12, color: scheme.onSurfaceVariant);
+    final link = plain.copyWith(
+      color: scheme.primary,
+      fontWeight: FontWeight.w600,
+      decoration: TextDecoration.underline,
+    );
+    return Wrap(
+      alignment: WrapAlignment.center,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Text('By signing in or creating an account you agree to our ', style: plain),
+        InkWell(
+          onTap: () => onOpen('Terms of Service', AppConfig.termsUrl),
+          child: Text('Terms of Service', style: link),
+        ),
+        Text(' and ', style: plain),
+        InkWell(
+          onTap: () => onOpen('Privacy Policy', AppConfig.privacyUrl),
+          child: Text('Privacy Policy', style: link),
+        ),
+        Text('.', style: plain),
+      ],
+    );
+  }
 }
 
 /// Why the last session ended. Deliberately prominent: someone opening the app

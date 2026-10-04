@@ -221,6 +221,20 @@ void main() {
     });
   });
 
+  testWidgets('the terms and the privacy policy are offered before anything is agreed to',
+      (tester) async {
+    await pumpLogin(tester);
+
+    expect(find.textContaining('you agree to our'), findsOneWidget);
+    expect(find.text('Terms of Service'), findsOneWidget);
+    expect(find.text('Privacy Policy'), findsOneWidget);
+
+    // No browser to hand it to in a test build, so the address is shown instead.
+    await tester.tap(find.text('Terms of Service'));
+    await tick(tester);
+    expect(find.textContaining('memoriesiq.nativemindsai.com/terms.html'), findsOneWidget);
+  });
+
   group('signing in', () {
     testWidgets('a good code claims a session and signs the device in', (tester) async {
       await pumpLogin(tester);

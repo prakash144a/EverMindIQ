@@ -10,6 +10,11 @@ class AppConfig {
   /// the brand, and it is the only spelling that should ever reach a screen.
   static const String appName = 'MemoriesIQ';
 
+  /// The agreement someone accepts by signing in, and the policy beside it.
+  /// Both live on the marketing site, which is the one copy of each.
+  static const String termsUrl = 'https://memoriesiq.nativemindsai.com/terms.html';
+  static const String privacyUrl = 'https://memoriesiq.nativemindsai.com/privacy.html';
+
   /// REST base URL. Android emulator reaches host localhost via 10.0.2.2.
   static const String apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
