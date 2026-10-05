@@ -3,10 +3,12 @@
 A living tracker for every phase and major work item. Update the status boxes as work lands.
 Aligns with the phased delivery in [architecture.md §8](./architecture.md).
 
-**Last updated:** 2026-08-18 (**Talk-to-AI voice is real** — the app streams microphone PCM to
-Gemini Live over `/live` and plays Gemini's own voice back, replacing the on-device recognizer and
-text-to-speech entirely; journals and journal-scoped recall before it; admin console live; backend
-`api:v11` deployed — **not yet redeployed with the voice endpoint**)
+**Last updated:** 2026-10-04 (**a memory can now be renamed, retitled by the AI and reworded** for
+seven days after it is saved, and its title and summary have a language setting of their own — live
+on backend `api:v16` and in the web build; the app running in a browser, with one account open on a
+phone and a browser at once, came just before it. All of it sits on the `tier-limits-and-deletion`
+branch, **21 commits ahead of `main` and not merged**. One commit is **not yet deployed**: the
+sign-in email saying MemoriesIQ rather than VoiceIQ)
 
 ## Status legend
 
@@ -18,24 +20,26 @@ text-to-speech entirely; journals and journal-scoped recall before it; admin con
 > recording goes from a signed upload into the CMEK bucket, through Pub/Sub to real Gemini
 > transcription and enrichment, into Vertex embeddings and Firestore, and back out of a RAG query
 > with a citation — against live GCP, in under 10 seconds. A **typed** memory takes the same route
-> from enrichment onward. An admin console reports who is using it.
-> Mock mode remains the offline/test path. What's left is release readiness (Play listing, app
-> signing, CI deploy automation), the Phase 2 features that were only ever mocked, and the deferred
-> cost work in Phase 4.
+> from enrichment onward. An admin console reports who is using it, and the same account opens in a
+> browser as well as on a phone.
+> Mock mode remains the offline/test path. What's left is release readiness (app signing, the Play
+> listing, getting the work onto `main` with CI green and deploys automated), the two things never
+> exercised against the live model (a real voice conversation, cross-lingual recall), the Phase 2
+> features that were only ever mocked, and the deferred cost work in Phase 4.
 
 ## What is live right now
 
 | | |
 |---|---|
-| API | `https://voiceiq-api-fv2se2zeza-uc.a.run.app` — image `api:v12`, real mode, revision
-`voiceiq-api-00015-7kz` (2026-08-19). **First deploy carrying voice `/live` audio**, the five tier
-limits and both delete paths. Does **not** carry the ingestion delete-race fix — see Phase 3.5. |
-| Admin console | `https://memoriesiq-admin.web.app` — allowlisted Google sign-in |
-| Marketing site | target `memoriesiq-site` created, **nothing published yet** (see 3.5) |
+| API | `https://voiceiq-api-fv2se2zeza-uc.a.run.app` — image `api:v16`, real mode, revision `voiceiq-api-00019-gts` (2026-10-04; read back with `gcloud run services describe` after the apply). Adds memory editing: the `summary_language` setting, `title` and `transcript` on `PATCH /recordings/{id}`, `POST /recordings/{id}/title`, and the seven-day edit window. Still carries two-surface sessions, the name-after-code sign-in, and the ingestion delete-race fix, which has been in every image since `v13`. **Does not carry** the sign-in email rename (`2dcd715`), so that email still says VoiceIQ until the next image. |
+| Web app | `https://app.memoriesiq.nativemindsai.com` — the Flutter web build on an Azure Static Web App, deployed by hand with the SWA CLI (see [`app/README.md`](../app/README.md)). Rebuilt and redeployed 2026-10-04 with the memory-editing controls, after `api:v16` was live |
+| Marketing site | `https://memoriesiq.nativemindsai.com` — Azure Static Web App, also deployed by hand (see [`site/README.md`](../site/README.md)). The privacy policy is at `/privacy.html` |
+| Admin console | `https://memoriesiq-admin.web.app` — allowlisted Google sign-in, Firebase Hosting |
 | GCP / Firebase | project `voiceiq-505205`, region `us-central1` |
 | Android package | `com.memoriesiq.app` (registered in Firebase; the old `com.example.voiceiq` app still exists and can be deleted once a build is confirmed) |
-| CI | green on `f4f95f2` — backend, app, admin all pass; `deploy` skipped (gated on `DEPLOY_ENABLED`) |
-| Tests | 300 backend, 105 app, `ruff check app tests` clean, `tsc --noEmit` clean |
+| Branch | `tier-limits-and-deletion` — 21 commits ahead of `main`, no pull request open. `main` is still at `f107e5a` (2026-08-18), so everything from the tier limits onward is deployed but unmerged |
+| CI | **red on `main`** — the last run was `f107e5a` (2026-08-18) and its backend job failed. CI triggers on pushes to `main` and on pull requests only, so it has **never run** on the 21 commits since. `deploy` is still gated on `DEPLOY_ENABLED` and has never run |
+| Tests | Run locally 2026-10-04: 417 backend, 174 app, `flutter analyze` clean, `tsc --noEmit` clean. `ruff check app tests` reports **2 findings**, both in `tests/test_otp_mock_code.py` (`I001` import order, `E501` line length) — enough to fail the CI lint gate |
 
 > **Before running Terraform in a fresh clone:** `infra/secrets.auto.tfvars` is **gitignored** and
 > must be recreated — it holds `billing_account` and `admin_emails`. Without it `apply` prompts for
@@ -65,41 +69,37 @@ limits and both delete paths. Does **not** carry the ingestion delete-race fix �
 > readable value in the console, in `gcloud run describe`, or in a deploy log. The sender address is
 > a plain env var, being on every email anyway. A `precondition` fails the apply with a clear message
 > if the credential is empty, which is what a fresh clone would otherwise publish, silently breaking
-> sign-in email. **Not yet applied** — plan is `2 to add, 1 to change, 0 to destroy`. The unused
+> sign-in email. **Applied** — the `voiceiq-acs-connection` secret is in Terraform state (checked
+2026-10-04). The unused
 > `google_secret_manager_secret.app` is deliberately kept: it holds a hand-added version from the
 > verification pass, and dropping it from the config would delete it.
 
 ## Next session — start here
 
-Ordered by what unblocks the most. (1) → (2) is the only real dependency; the rest are independent.
+Ordered by what unblocks the most. (1) gates (6); the rest are independent.
 
-0. **Redeploy for the delete-race fix** — Phase 3.5, and first because production is currently
-   wrong in a way the app promises it is not. `api:v12` still resurrects a memory deleted within
-   seconds of being created (see the Phase 3.5 entry). The fix is on `main` with 7 tests; it needs
-   `gcloud builds submit backend --tag …/api:v13` + `gcloud run deploy`, and an APK rebuild is *not*
-   required — nothing client-side changed.
-1. **Publish the marketing site** — Phase 3.5. Legal copy is complete; two values need a lawyer's
-   sign-off first (governing jurisdiction, liability cap). One command once confirmed. Do this first
-   because it produces the privacy-policy URL the Play listing requires.
-2. **Play Store readiness** — Cross-cutting. App signing is still debug keys. This is the real
-   blocker to shipping the app at all, and it needs the URL from (1).
-3. **Hold a real voice conversation** — Phase 1. The redeploy is done (`api:v12`), so the endpoint
-   exists in production for the first time; the conversation has still never happened. Everything past
-   `client.aio.live.connect` is `# pragma: no cover` and the SDK's message shapes are the part most
-   likely to have moved. Do this in **Tamil or Hindi** and it also closes (4).
-4. **Verify cross-lingual recall** — Cross-cutting. The load-bearing unverified assumption for the
+1. **Get the branch onto `main` with CI green** — Cross-cutting. Production runs code that `main`
+   does not have: 21 commits on `tier-limits-and-deletion`, no pull request, and CI has not run on
+   any of them. Fix the two ruff findings in `tests/test_otp_mock_code.py`, open the PR (which is
+   what triggers CI), and merge.
+2. **Play Store readiness** — Cross-cutting. Release builds still sign with the debug keystore. The
+   privacy-policy URL the listing needs now exists, so nothing upstream blocks this any more. It is
+   the real blocker to shipping the Android app at all.
+3. **Lawyer's sign-off on the terms** — Phase 3.5. The site is public, so this is no longer a gate
+   on publishing; it is a gate on sending paid traffic to it. Still unconfirmed: the governing
+   jurisdiction, the US$100 liability cap, and now the three clauses added on 2026-10-03.
+4. **Hold a real voice conversation** — Phase 1. The endpoint has been in production since `api:v12`
+   and the conversation has still never happened. Everything past `client.aio.live.connect` is
+   `# pragma: no cover` and the SDK's message shapes are the part most likely to have moved. Do this
+   in **Tamil or Hindi** and it also closes (5). It can now be tried from a browser as well.
+5. **Verify cross-lingual recall** — Cross-cutting. The load-bearing unverified assumption for the
    target users; needs one real non-English recording through the live pipeline.
-5. **Automate deploys in CI** — Phase 0. Every deploy so far has been manual, and voice mode is now
-   the second feature in a row to sit undeployed behind that.
-6. **Decide what else premium unlocks** — Phase 3.5, product decision. It now gates five things —
-   monthly voice memories, recording length, conversation length, typed-memory length and journal
-   count — so the machinery is real and the three that cost money per minute are metered; what
-   remains is whether it is *enough*, and there is still no purchase flow.
-
-> **Note:** `api:v12` (2026-08-19) is the first image with the audio half of `/live`, so voice mode
-> can now reach the real Gemini Live model for the first time. Nobody has yet held a conversation
-> through it — (3) below is still open, and everything past `client.aio.live.connect` remains
-> unexercised against the real SDK.
+6. **Automate deploys in CI** — Phase 0. Every deploy so far has been manual, and there are now
+   three surfaces deployed by hand: Cloud Run and the two Azure Static Web Apps. The written job
+   covers only the first, plus Firestore rules and the admin console.
+7. **A way to buy premium** — Phase 3.5, product decision. Five limits are enforced and the admin
+   console has an explicit "Upgrade to Pro", but premium is still granted by hand. What remains is
+   whether the five are *enough* to charge for, and then a purchase flow.
 
 ---
 
@@ -121,7 +121,9 @@ Ordered by what unblocks the most. (1) → (2) is the only real dependency; the 
 - [ ] Automate deploy in CI — Workload Identity Federation + repo vars/secrets (`DEPLOY_ENABLED`,
   `GCP_PROJECT_ID`, `GCP_REGION`, `GCP_WIF_PROVIDER`, `GCP_DEPLOY_SA`, plus the `FIREBASE_WEB_*` vars
   the admin build needs) so pushes to `main` redeploy. Every deploy to date has been manual. The job
-  itself is written and has never run — worth a dry run on a throwaway branch before trusting it
+  itself is written and has never run — worth a dry run on a throwaway branch before trusting it.
+  It covers Cloud Run, Firestore rules/indexes and the admin console; the two Azure Static Web Apps
+  (marketing site, web app) are deployed by hand with the SWA CLI and would need steps of their own
 - [x] Firebase setup — project added to Firebase; Android app **`com.memoriesiq.app`** and a **web**
   app registered; `google-services.json` + `firebase_options.dart` generated; **Anonymous and Google
   providers enabled**; backend SA granted `firebaseauth.viewer`. App Check: later.
@@ -136,8 +138,15 @@ Ordered by what unblocks the most. (1) → (2) is the only real dependency; the 
   reports the detected language, because nothing upstream determined it — which matters most for the
   users likeliest to type in Tamil or Hindi. New `POST /recordings/text`; the four places that
   assumed audio (Home, Milestones, Calendar, Recall citations) check `hasAudio` first
+- [x] **A typed memory is kept as a draft until it is saved** (2026-10-03) — every change is written
+  to a draft the screen restores on opening, so closing the screen, refreshing the tab or the app
+  being put away no longer loses it. Cleared on a successful save and on sign-out, so a shared device
+  does not hand the next person an unfinished sentence
 - [x] Calendar view of moments
-- [x] Talk-to-AI **text** chat (over the `/live` WebSocket)
+- [x] Talk-to-AI **text** chat — a typed question is an ordinary request to `/chat` (2026-10-03). It
+  used to ride the `/live` WebSocket, which had quietly stopped working: the socket was opened without
+  the session id every other call carries, the handshake was refused, and a question sat at
+  "Recalling…" forever. A failure is now said in the conversation
 - [x] In-app **audio playback** of recordings (`GET /recordings/{id}/audio`)
 - [x] **Memory detail view** — every list row now opens the memory in full: the transcript (labelled
   as AI-produced, since it is a best guess), the summary, people/places/tags/mood, the star, and
@@ -146,6 +155,17 @@ Ordered by what unblocks the most. (1) → (2) is the only real dependency; the 
   screen at all** — a recording could be played but never read, and a typed memory could not be
   revisited in any form. Tappable from Home recents, the milestone rail, Milestones, Calendar, and
   Recall citations
+- [x] **Editing a memory, for seven days** (2026-10-04) — the title can be renamed (no AI call) or
+  handed back to the AI for a different one (`POST /recordings/{id}/title`); the words can be
+  rewritten, typed or transcribed, which re-runs enrichment and indexing so the summary, entities
+  and vectors follow them while the title is kept. The summary has no edit of its own. All three
+  close seven days after capture (`memory_edit_window_days`, published on `GET /profile`), with the
+  controls left on the page disabled and a line saying why; starring, filing and deleting stay open.
+  Title and summary are written in a new `summary_language` setting — "Match the memory" or a named
+  language — because the old prompt passed the answer-language default, the bare word "auto", and
+  the model guessed. Deployed in `api:v16` and the web build. **Tested in mock mode only**: the
+  rewritten enrichment prompt and the new title prompt have not been run against the live model.
+  Neither edits nor new titles are metered, so each one inside the window is a model call
 - [x] **Journals** — named containers, one per memory, filed by hand at capture and reassignable from
   the memory detail view. `users/{uid}/journals/{id}`; `journal_id` on the recording; full CRUD at
   `/journals`; deleting one unfiles its memories rather than deleting them. **Recall can be scoped to
@@ -184,6 +204,8 @@ Ordered by what unblocks the most. (1) → (2) is the only real dependency; the 
   Note `flutter_pcm_sound` pins `compileSdkVersion 33` while its own androidx dependencies demand
   34+, which fails the AAR metadata check for the whole build; `android/build.gradle.kts` now raises
   any lagging plugin to the app's 36 rather than pinning the app back.
+  The browser build plays the same stream through Web Audio (`PcmPlayer`, 2026-10-03), because
+  `flutter_pcm_sound` is Android, iOS and macOS only.
   Promote to `[x]` once a real conversation has run against the deployed backend
 
 ## Phase 2 — Enrichment
@@ -192,6 +214,9 @@ Ordered by what unblocks the most. (1) → (2) is the only real dependency; the 
 - [~] Insights summaries — mock implemented; real map-reduce over Gemini pending
 - [ ] Entity extraction + search — not built
 - [ ] Push notifications (FCM) — not built
+- [ ] **Photos, videos and files on a memory** — not built. The capture screen carries a placeholder
+  (`AttachPlaceholderButton`) whose every entry is disabled and which opens no picker; it settles
+  where the control goes and nothing more
 
 ## Phase 3 — Scale & polish
 
@@ -218,7 +243,9 @@ Ordered by what unblocks the most. (1) → (2) is the only real dependency; the 
   not `set` — atomic, where a `get`-then-`set` guard would only shrink the race), turning a `None`
   return into the existing `RecordingNotFound`, and discarding chunks the losing run had written.
   Covers at-least-once redelivery for free, since the push handler already acks that exception.
-  7 tests, each verified to fail without the guard. **Not deployed** — production still has the bug
+  7 tests, each verified to fail without the guard. **Deployed** — in every image since `api:v13`,
+  and production runs `v15`. The fix has not been re-checked against production the way the bug was
+  found
 - [ ] Retrieval / prompt tuning
 - [ ] Optional end-to-end encryption tier
 - [x] **Real accounts, one device at a time, and sign-out** (2026-08-22) — the deferred
@@ -235,6 +262,13 @@ Ordered by what unblocks the most. (1) → (2) is the only real dependency; the 
   Login is now the app's gate — no anonymous browsing. 43 backend tests over the flows, 10 widget
   tests over the screen; 352 + 138 green. **Breaking**: any installed build stops working against
   this backend, so app and backend ship together
+- [x] **One session per surface, not per account** (2026-10-03) — an account now holds one session
+  on **mobile** and one on **web**, so typing a memory on a laptop no longer signs the phone out.
+  Between two phones the rule is unchanged. The surface comes from the reported platform and anything
+  that is not a browser is mobile, so an unrecognised client cannot mint a third session; the request
+  gate matches the session id against both slots rather than trusting `X-Platform`, and logout clears
+  only the slot the presented id is in. `sessions/{uid}` became a map of surface to session, with old
+  bare documents read in place, so the deploy signed nobody out
 
 ---
 
@@ -283,19 +317,49 @@ Ordered by what unblocks the most. (1) → (2) is the only real dependency; the 
   counters and no upsell
 - [x] **Marketing site** (`site/`) — static HTML for ad traffic, plus the privacy policy the Play
   listing requires. Legal copy complete: NATIVE MINDS AI LABS, WA, USA, `info@nativemindsai.com`
-- [x] **Firebase Hosting** — two targets (`site`, `admin`) in `firebase.json` + `.firebaserc`;
-  `firebasehosting.googleapis.com` enabled in Terraform
+- [x] **Firebase Hosting** — one target (`admin`) in `firebase.json` + `.firebaserc`;
+  `firebasehosting.googleapis.com` enabled in Terraform. The `site` target was dropped when the
+  marketing page moved to Azure, because CI deploys every hosting target and would have republished
+  a stale copy. The Firebase site `memoriesiq-site` still exists (seen in `firebase
+  hosting:sites:list`, 2026-10-04) and can be deleted
 - [x] **Firebase web app registered + Google sign-in enabled**; admin console deployed to
   `https://memoriesiq-admin.web.app` with the allowlist set on Cloud Run
 - [x] ~~Run the stats backfill~~ — **not required.** The script
   (`backend/scripts/backfill_user_stats.py`) is kept for the case where pre-`userStats` accounts ever
   need reconstructing, but the existing accounts are throwaway test identities not worth importing
-- [ ] **Publish the marketing site** — `firebase deploy --only hosting:site --project voiceiq-505205`.
-  Held back deliberately: two values in `site/terms.html` were *inferred*, not given — the governing
-  jurisdiction (**State of Washington**, from the registered address) and the liability cap
-  (**US$100**, a floor because the app is free, so "the amount you paid us" is $0; a literal $0 cap
-  can be void as illusory in some jurisdictions and would take the whole clause with it). Both want a
-  lawyer's confirmation before the site takes paid traffic
+- [x] **Publish the marketing site** (2026-08-22) — live at `https://memoriesiq.nativemindsai.com`,
+  on an Azure Static Web App beside the company site rather than on Firebase Hosting: the domain's
+  DNS zone is already in Azure, and a subdomain of a site people already trust is a better landing
+  page for paid clicks than a bare new domain. The backend stays on GCP. Canonical URLs were fixed
+  to point here instead of `memoriesiq.com`, which does not resolve. Since 2026-10-03 the header and
+  hero link into the web app, and the stylesheet is `styles.v5.css` (CSS is served immutable for a
+  year, so a change needs a new name)
+- [ ] **Lawyer's sign-off on the terms** — the site went out without it. Two values in
+  `site/terms.html` were *inferred*, not given — the governing jurisdiction (**State of Washington**,
+  from the registered address) and the liability cap (**US$100**, a floor because the app is free, so
+  "the amount you paid us" is $0; a literal $0 cap can be void as illusory in some jurisdictions and
+  would take the whole clause with it). Three clauses were added on 2026-10-03 and are equally
+  unreviewed: the service may stop for any reason, memories can be lost to technical failure without
+  liability, and any account may be closed at any time without notice. All of it wants confirming
+  before the site takes paid traffic
+- [x] **The app in a browser** (2026-10-03) — the Flutter web build is live at
+  `https://app.memoriesiq.nativemindsai.com`, an Azure Static Web App. Three things stood between
+  compiling and being usable: the install id, session and theme were files under `path_provider`
+  (no web implementation, so every refresh signed the tab out) and now go through `LocalStore`;
+  spoken recall needed a Web Audio player; and playback discarded the server's `Content-Type`, so a
+  memory recorded in a browser (webm) reached a phone as `audio/mp4`. The static-site config allows
+  the microphone for its own origin and serves Flutter's entry points `no-cache`
+- [x] **Wide-screen layout** (2026-10-03) — at 1100px and wider the app is a slim rail and a page,
+  with Record and Recall as the two large actions on Home. "More" became "Settings", laid out as a
+  list of sections with the chosen one beside it. A narrower window is still exactly the phone layout
+- [x] **Sign-in asks for the email alone** (2026-10-03) — the name is asked for after the code, and
+  only when the account has none; the server fills a blank and never overwrites. The screen now says
+  that signing in agrees to the terms and privacy policy, and links to both. `MOCK_AUTH=true` and
+  `VOICEIQ_MOCK_OTP_CODE` make signing in against the mock backend possible again
+- [x] **Admin console: user page and plan control** (2026-10-03) — opening a user rendered nothing,
+  because the page read `previous_uids.length`, a list the API stopped sending when account merging
+  was removed. Fixed, with an error boundary so the next such bug says what happened. The tier
+  control is now a Plan section with a confirmed "Upgrade to Pro"
 - [~] **Decide what premium actually unlocks** — five things now (see the tier entry above). The
   three voice limits are the ones with a cost story behind them: transcription, enrichment and a live
   Gemini socket all bill per minute, so what premium sells there is *more of the expensive thing*
@@ -353,8 +417,16 @@ Ordered by what unblocks the most. (1) → (2) is the only real dependency; the 
   application id (`com.memoriesiq.app`), launcher label, and the **launcher icon** — "Rings", an
   adaptive icon with a themed-icon monochrome layer plus legacy mipmaps for API 23–25, all generated
   from `tools/branding/generate_icons.py`. **Outstanding: app signing** (release builds still use the
-  debug keystore, per `app/android/app/build.gradle.kts`) and the Play listing itself, which needs
-  the privacy-policy URL from the marketing site
+  debug keystore, per `app/android/app/build.gradle.kts`) and the Play listing itself. The
+  privacy-policy URL the listing needs now exists: `https://memoriesiq.nativemindsai.com/privacy.html`
+- [ ] **Merge `tier-limits-and-deletion` into `main`** — 21 commits, all but the last two deployed to production but never
+  merged and never run through CI, which only triggers on `main` pushes and pull requests. `main`'s
+  own last run is red. Two ruff findings in `tests/test_otp_mock_code.py` have to go first
+- [x] **The ingest subscription expired and took ingestion with it** (2026-10-03) — new recordings
+  sat at "transcribing" forever. A Pub/Sub subscription with no expiration policy is deleted after
+  31 days without activity, and publishing to a topic nobody subscribes to succeeds and delivers
+  nothing, so nothing failed loudly. `expiration_policy { ttl = "" }` in `infra/main.tf` means never
+  expire; applied, and `voiceiq-ingest-worker` is back with no expiry (checked 2026-10-04)
 - [ ] Revisit the `record` dependency: the `record_linux: 1.3.1` override unblocks the build — consider bumping `record` to its aligned 6.x line instead
 - [x] **Real-mode end-to-end verification pass** (2026-08-16) — record → GCS/CMEK → Pub/Sub → Gemini →
   embeddings → Firestore → RAG recall, all exercised against live GCP with a real Firebase anonymous
@@ -406,12 +478,12 @@ Ordered by what unblocks the most. (1) → (2) is the only real dependency; the 
 | Phase | Done | Partial (mock) | Not started |
 |-------|:----:|:--------------:|:-----------:|
 | 0 — Foundations | 7 | 0 | 1 |
-| 1 — MVP | 11 | 1 | 0 |
-| 2 — Enrichment | 0 | 2 | 2 |
-| 3 — Scale & polish | 0 | 1 | 6 |
-| 3.5 — Operations & launch | 11 | 1 | 1 |
+| 1 — MVP | 13 | 1 | 0 |
+| 2 — Enrichment | 0 | 2 | 3 |
+| 3 — Scale & polish | 4 | 1 | 4 |
+| 3.5 — Operations & launch | 16 | 1 | 1 |
 | 4 — Cost optimization | 0 | 0 | 7 |
-| Cross-cutting | 7 | 0 | 4 |
+| Cross-cutting | 8 | 0 | 5 |
 
 ## Maintaining this doc
 

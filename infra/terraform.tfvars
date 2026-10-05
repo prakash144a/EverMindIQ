@@ -4,7 +4,7 @@
 project_id        = "voiceiq-505205"
 region            = "us-central1"
 audio_bucket_name = "voiceiq-audio-voiceiq-505205"
-container_image   = "us-central1-docker.pkg.dev/voiceiq-505205/voiceiq/api:v15"
+container_image   = "us-central1-docker.pkg.dev/voiceiq-505205/voiceiq/api:v16"
 
 # Browser origins allowed to call the API. The mobile app is not a browser and
 # ignores CORS entirely; the admin console and the Flutter *web* build are not
