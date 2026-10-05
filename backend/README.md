@@ -66,6 +66,8 @@ purge.
 | POST   | `/recordings`            | Register uploaded audio; triggers ingestion.   |
 | GET    | `/recordings`            | List (optional `date_from`/`date_to`).         |
 | GET    | `/recordings/{id}`       | Recording + signed audio URL.                  |
+| PATCH  | `/recordings/{id}`       | Star, file, rename; new words re-run the AI.   |
+| POST   | `/recordings/{id}/title` | Have the AI write a new title.                 |
 | DELETE | `/recordings/{id}`       | Delete a recording.                            |
 | POST   | `/chat`                  | Text RAG over memories (answer + citations).   |
 | POST   | `/insights`              | Range summary (day…lifetime…custom), cached.   |

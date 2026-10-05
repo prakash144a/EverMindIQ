@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/tokens.dart';
+import '../../data/api_client.dart';
 import '../../data/models.dart';
 import '../../data/providers.dart';
 import '../../widgets/audio_play_button.dart';
@@ -218,10 +219,36 @@ class _Body extends ConsumerWidget {
     }
   }
 
+  /// Give this memory a title of the user's own.
+  ///
+  /// Not optimistic, unlike the journal above: the server can refuse a rename
+  /// (the memory may be mid-processing), so the title moves once it has agreed.
+  Future<void> _rename(BuildContext context, WidgetRef ref) async {
+    final title = await _promptForTitle(context, rec.title);
+    if (title == null || title == rec.title) return;
+    try {
+      await ref.read(recordingsProvider.notifier).rename(rec.id, title);
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_editError(e))));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
     final processing = isProcessing(rec.status);
+    // Once the words are the user's own, a memory in flight is being re-read,
+    // not transcribed — whichever way it was first captured.
+    final ownWords = !rec.hasAudio || rec.transcriptEdited;
+    // The title and the words can be changed for a few days after a memory is
+    // saved, then never again. The controls stay on the page, disabled, with a
+    // line saying why — vanishing would read as a bug. The server refuses the
+    // same edits, so this is a courtesy rather than the gate.
+    final windowDays =
+        (ref.watch(profileProvider).valueOrNull ?? const UserProfile()).editWindowDays;
+    final editable = rec.editableWithin(windowDays);
     return ListView(
       padding: const EdgeInsets.all(Insets.lg),
       children: [
@@ -237,6 +264,22 @@ class _Body extends ConsumerWidget {
                     ?.copyWith(fontWeight: FontWeight.w700),
               ),
             ),
+            // Not while processing: ingestion writes the whole memory back when
+            // it finishes, and the server refuses an edit it would overwrite.
+            if (!processing) ...[
+              IconButton(
+                tooltip: 'Rename',
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.edit_outlined, size: 20),
+                onPressed: editable ? () => _rename(context, ref) : null,
+              ),
+              // A recording that never produced a transcript has nothing for
+              // the AI to title.
+              _NewTitleButton(
+                recordingId: rec.id,
+                enabled: editable && rec.transcript.trim().isNotEmpty,
+              ),
+            ],
             const SizedBox(width: Insets.sm),
             Padding(
               padding: const EdgeInsets.only(top: Insets.xs),
@@ -249,6 +292,13 @@ class _Body extends ConsumerWidget {
           _subtitle,
           style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12.5),
         ),
+        if (!editable) ...[
+          const SizedBox(height: Insets.xs),
+          Text(
+            'Editing closed ${_days(windowDays)} after this memory was saved.',
+            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 11.5),
+          ),
+        ],
         const SizedBox(height: Insets.md),
         _JournalRow(
           journal: journalFor(ref, rec.journalId),
@@ -260,10 +310,10 @@ class _Body extends ConsumerWidget {
           const SizedBox(height: Insets.md),
           _Banner(
             icon: null,
-            text: statusLabel(rec.status, source: rec.source),
-            detail: rec.hasAudio
-                ? 'The transcript appears here once it is ready.'
-                : 'Your words are saved. The AI is still reading them.',
+            text: statusLabel(rec.status, source: ownWords ? 'text' : rec.source),
+            detail: ownWords
+                ? 'Your words are saved. The AI is still reading them.'
+                : 'The transcript appears here once it is ready.',
             color: scheme.surfaceContainerHighest,
             onColor: scheme.onSurfaceVariant,
           ),
@@ -284,15 +334,29 @@ class _Body extends ConsumerWidget {
           const SectionHeader('Summary'),
           const SizedBox(height: Insets.sm),
           Text(rec.summary, style: const TextStyle(fontSize: 15, height: 1.45)),
+          const SizedBox(height: Insets.xs),
+          // The one part of the page with no way to edit it, so say why.
+          Text(
+            editable
+                ? 'Written by AI. It is rewritten when you edit the memory below.'
+                : 'Written by AI.',
+            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 11.5),
+          ),
         ],
         const SizedBox(height: Insets.xl),
-        SectionHeader(rec.hasAudio ? 'Transcript' : 'What you wrote'),
+        SectionHeader(
+          rec.hasAudio ? 'Transcript' : 'What you wrote',
+          action: processing ? null : 'Edit',
+          onAction: editable ? () => _openEditor(context, rec, windowDays) : null,
+        ),
         const SizedBox(height: Insets.sm),
         if (rec.hasAudio)
           Padding(
             padding: const EdgeInsets.only(bottom: Insets.sm),
             child: Text(
-              'Transcribed by AI from your recording — it may not be word-perfect.',
+              rec.transcriptEdited
+                  ? 'Transcribed by AI from your recording, then edited by you.'
+                  : 'Transcribed by AI from your recording — it may not be word-perfect.',
               style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 11.5),
             ),
           ),
@@ -343,6 +407,216 @@ class _Body extends ConsumerWidget {
     final m = total ~/ 60;
     final s = total % 60;
     return m > 0 ? '${m}m ${s}s' : '${s}s';
+  }
+}
+
+/// "7 days", "1 day" — the window is configured on the server, so it can be either.
+String _days(int n) => n == 1 ? '1 day' : '$n days';
+
+/// Turn a refused edit into something worth reading.
+///
+/// Both of these are ordinary answers rather than faults, so they get a plain
+/// sentence instead of a status code.
+String _editError(Object e) {
+  if (e is ApiException) {
+    if (e.statusCode == 409) {
+      return 'This memory is still being processed. Try again in a moment.';
+    }
+    if (e.statusCode == 413) return 'That is longer than your plan allows.';
+    // The window closed while the page was open, or this device's clock is off.
+    if (e.statusCode == 403) return 'This memory can no longer be edited.';
+  }
+  return 'Could not save that: $e';
+}
+
+Future<String?> _promptForTitle(BuildContext context, String initial) {
+  final controller = TextEditingController(text: initial);
+  return showDialog<String>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('Rename memory'),
+      content: TextField(
+        controller: controller,
+        autofocus: true,
+        // The server's cap. Longer than a journal name, still a title.
+        maxLength: 80,
+        textCapitalization: TextCapitalization.sentences,
+        decoration: const InputDecoration(hintText: 'A title for this memory'),
+        onSubmitted: (v) => Navigator.of(dialogContext).pop(v.trim()),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(dialogContext).pop(controller.text.trim()),
+          child: const Text('Save'),
+        ),
+      ],
+    ),
+  ).then((v) => (v == null || v.isEmpty) ? null : v);
+}
+
+/// Asks the AI for a different title.
+///
+/// The way back from a rename that was a mistake, and the way on from an AI
+/// title that was not liked — each press replaces the current one. Holds its
+/// own busy state because the model takes a few seconds, and a second press in
+/// that time would only pay for a title nobody sees.
+class _NewTitleButton extends ConsumerStatefulWidget {
+  const _NewTitleButton({required this.recordingId, required this.enabled});
+
+  final String recordingId;
+  final bool enabled;
+
+  @override
+  ConsumerState<_NewTitleButton> createState() => _NewTitleButtonState();
+}
+
+class _NewTitleButtonState extends ConsumerState<_NewTitleButton> {
+  bool _busy = false;
+
+  Future<void> _run() async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _busy = true);
+    try {
+      await ref.read(recordingsProvider.notifier).regenerateTitle(widget.recordingId);
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(_editError(e))));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      tooltip: 'Generate a new title',
+      visualDensity: VisualDensity.compact,
+      onPressed: widget.enabled && !_busy ? _run : null,
+      icon: _busy
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.auto_awesome_outlined, size: 20),
+    );
+  }
+}
+
+Future<void> _openEditor(BuildContext context, Recording rec, int windowDays) {
+  return Navigator.of(context).push(
+    MaterialPageRoute(
+      fullscreenDialog: true,
+      builder: (_) => _EditTextScreen(rec, windowDays: windowDays),
+    ),
+  );
+}
+
+/// Rewrite a memory's words: what was typed, or the transcript of what was said.
+///
+/// A page of its own rather than a field in place, because saving is not a
+/// small act — the summary is rewritten and the memory is indexed again — and
+/// the note above the field is where that gets said before it happens.
+class _EditTextScreen extends ConsumerStatefulWidget {
+  const _EditTextScreen(this.rec, {required this.windowDays});
+  final Recording rec;
+  final int windowDays;
+
+  @override
+  ConsumerState<_EditTextScreen> createState() => _EditTextScreenState();
+}
+
+class _EditTextScreenState extends ConsumerState<_EditTextScreen> {
+  late final TextEditingController _ctl = TextEditingController(text: widget.rec.transcript);
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _ctl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final text = _ctl.text.trim();
+    if (text.isEmpty) return;
+    if (text == widget.rec.transcript.trim()) {
+      // Nothing changed, so nothing for the AI to re-read.
+      Navigator.of(context).pop();
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _saving = true);
+    try {
+      await ref.read(recordingsProvider.notifier).rewrite(widget.rec.id, text);
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Memory updated. Its summary is rewritten to match.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      messenger.showSnackBar(SnackBar(content: Text(_editError(e))));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final rec = widget.rec;
+    final profile = ref.watch(profileProvider).valueOrNull ?? const UserProfile();
+    // The tier's cap, but never below what is already there: a long transcript,
+    // or text written on a plan since lapsed, must still be correctable.
+    final maxChars =
+        rec.transcript.length > profile.textMaxChars ? rec.transcript.length : profile.textMaxChars;
+    final canSave = !_saving && _ctl.text.trim().isNotEmpty;
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(rec.hasAudio ? 'Edit transcript' : 'Edit memory'),
+        actions: [
+          TextButton(onPressed: canSave ? _save : null, child: const Text('Save')),
+        ],
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(Insets.lg),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              [
+                'Saving rewrites the summary to match.',
+                if (rec.hasAudio)
+                  'The title stays as it is, and the recording itself is not changed.'
+                else
+                  'The title stays as it is.',
+                'A memory can be edited for ${_days(widget.windowDays)} after it is saved.',
+              ].join(' '),
+              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12.5),
+            ),
+            const SizedBox(height: Insets.md),
+            Expanded(
+              child: TextField(
+                controller: _ctl,
+                enabled: !_saving,
+                autofocus: true,
+                maxLines: null,
+                expands: true,
+                maxLength: maxChars,
+                textAlignVertical: TextAlignVertical.top,
+                keyboardType: TextInputType.multiline,
+                textCapitalization: TextCapitalization.sentences,
+                style: const TextStyle(fontSize: 15, height: 1.5),
+                decoration: const InputDecoration(border: OutlineInputBorder()),
+                onChanged: (_) => setState(() {}),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

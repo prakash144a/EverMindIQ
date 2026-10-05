@@ -322,6 +322,40 @@ class ApiClient {
     return Recording.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
   }
 
+  /// Rename a memory. A plain field write on the server: no AI runs, and the
+  /// title is the user's from then on.
+  Future<Recording> renameRecording(String recordingId, String title) async {
+    final r = await _client.patch(
+      _u('/recordings/$recordingId'),
+      headers: await _headers(),
+      body: jsonEncode({'title': title}),
+    );
+    if (r.statusCode != 200) _fail(r);
+    return Recording.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  /// Have the AI write a new title, different from the one the memory has now.
+  /// Only the title changes; the summary and the search index are left alone.
+  Future<Recording> regenerateTitle(String recordingId) async {
+    final r = await _client.post(_u('/recordings/$recordingId/title'), headers: await _headers());
+    if (r.statusCode != 200) _fail(r);
+    return Recording.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  /// Replace a memory's words — what was typed, or the transcript of what was
+  /// said. The server writes a new summary for them and re-indexes the memory;
+  /// the title is kept. In production that happens after this returns, so the
+  /// reply comes back still processing.
+  Future<Recording> editRecordingText(String recordingId, String text) async {
+    final r = await _client.patch(
+      _u('/recordings/$recordingId'),
+      headers: await _headers(),
+      body: jsonEncode({'transcript': text}),
+    );
+    if (r.statusCode != 200) _fail(r);
+    return Recording.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
   // -- journals ----------------------------------------------------------
 
   Future<List<Journal>> listJournals() async {

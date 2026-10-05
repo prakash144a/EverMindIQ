@@ -10,6 +10,10 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# Room for a real sentence of a title, short enough to stay a title in a list row.
+MAX_TITLE_LEN = 80
+
+
 class RecordingStatus(str, Enum):
     uploaded = "uploaded"
     transcribing = "transcribing"
@@ -88,6 +92,11 @@ class Recording(BaseModel):
 
     # Filled by the ingestion pipeline.
     transcript: str = ""          # original language / script
+    # Set when the user rewrites the memory's words by hand. Ingestion then
+    # treats the stored transcript as the source of truth and never transcribes
+    # the audio over it — Pub/Sub delivery is at-least-once, so a redelivered
+    # message would otherwise undo the edit.
+    transcript_edited: bool = False
     language: str = ""            # detected language(s), e.g. "ta", "hi-en" (code-switching)
     transcript_en: str = ""       # optional canonical English translation
     title: str = ""

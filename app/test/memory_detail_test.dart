@@ -27,11 +27,12 @@ void main() {
     List<String> places = const ['The lake'],
     List<String> tags = const ['fishing'],
     String mood = 'content',
+    int daysAgo = 2,
   }) =>
       {
         'id': id,
         'event_date': '2025-08-16',
-        'recorded_at': DateTime.now().toUtc().subtract(const Duration(days: 2)).toIso8601String(),
+        'recorded_at': DateTime.now().toUtc().subtract(Duration(days: daysAgo)).toIso8601String(),
         'status': status,
         'source': source,
         'title': title,
@@ -48,9 +49,13 @@ void main() {
     WidgetTester tester,
     List<Map<String, dynamic>> recs, {
     String openId = 'a',
+    Future<http.Response> Function(http.Request req)? onPatch,
+    Future<http.Response> Function(http.Request req)? onNewTitle,
   }) async {
     final client = MockClient((req) async {
       if (req.url.path == '/recordings') return http.Response(jsonEncode(recs), 200);
+      if (req.method == 'PATCH' && onPatch != null) return onPatch(req);
+      if (req.method == 'POST' && onNewTitle != null) return onNewTitle(req);
       return http.Response(jsonEncode({}), 200);
     });
     await tester.pumpWidget(
@@ -138,6 +143,192 @@ void main() {
     await pumpDetail(tester, [rec(id: 'other')], openId: 'gone');
 
     expect(find.text('Memory not found'), findsOneWidget);
+  });
+
+  testWidgets('the title can be renamed, and the summary is left alone', (tester) async {
+    Map<String, dynamic>? sent;
+    await pumpDetail(
+      tester,
+      [rec()],
+      onPatch: (req) async {
+        sent = jsonDecode(req.body) as Map<String, dynamic>;
+        return http.Response(jsonEncode(rec(title: sent!['title'] as String)), 200);
+      },
+    );
+
+    await tester.tap(find.byTooltip('Rename'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '  Dawn at the lake  ');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+
+    // A rename sends the title and nothing else — no words, so no AI run.
+    expect(sent, {'title': 'Dawn at the lake'});
+    expect(find.text('Dawn at the lake'), findsOneWidget);
+    expect(find.text('Fishing trip with Dad'), findsNothing);
+    expect(find.text('I went fishing with my father at the lake.'), findsOneWidget);
+  });
+
+  testWidgets('editing the words sends them and shows the rewritten summary', (tester) async {
+    Map<String, dynamic>? sent;
+    await pumpDetail(
+      tester,
+      [rec(source: 'text', durationSec: 0)],
+      onPatch: (req) async {
+        sent = jsonDecode(req.body) as Map<String, dynamic>;
+        return http.Response(
+          jsonEncode(rec(
+            source: 'text',
+            durationSec: 0,
+            transcript: sent!['transcript'] as String,
+            summary: 'I stayed home and baked bread.',
+          )),
+          200,
+        );
+      },
+    );
+
+    // The words are the only thing on the page with an Edit: the summary has
+    // none, because it is not the user's to write.
+    expect(find.text('Edit'), findsOneWidget);
+    await tester.tap(find.text('Edit'));
+    await tester.pumpAndSettle();
+    expect(find.text('Edit memory'), findsOneWidget);
+    expect(find.textContaining('The title stays as it is'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField), 'I stayed home and baked bread all day.');
+    await tester.pump();
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+
+    expect(sent, {'transcript': 'I stayed home and baked bread all day.'});
+    expect(find.text('Edit memory'), findsNothing, reason: 'the editor closes on success');
+    expect(find.text('I stayed home and baked bread all day.'), findsOneWidget);
+    expect(find.text('I stayed home and baked bread.'), findsOneWidget);
+    // The title was not part of the edit and has not moved.
+    expect(find.text('Fishing trip with Dad'), findsOneWidget);
+  });
+
+  testWidgets('a corrected transcript stops claiming to be purely the AI\'s', (tester) async {
+    await pumpDetail(tester, [
+      {...rec(), 'transcript_edited': true},
+    ]);
+
+    expect(find.textContaining('then edited by you'), findsOneWidget);
+    expect(find.textContaining('may not be word-perfect'), findsNothing);
+  });
+
+  testWidgets('a memory still processing offers no rename and no edit', (tester) async {
+    await pumpDetail(tester, [
+      rec(status: 'transcribing', title: '', transcript: '', summary: ''),
+    ]);
+
+    expect(find.byTooltip('Rename'), findsNothing);
+    expect(find.text('Edit'), findsNothing);
+  });
+
+  testWidgets('an edit the server refuses is explained and nothing changes', (tester) async {
+    await pumpDetail(
+      tester,
+      [rec()],
+      onPatch: (req) async => http.Response(
+        jsonEncode({
+          'detail': {'error': 'memory_processing', 'status': 'transcribing'},
+        }),
+        409,
+      ),
+    );
+
+    await tester.tap(find.byTooltip('Rename'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'Dawn at the lake');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('still being processed'), findsOneWidget);
+    expect(find.text('Fishing trip with Dad'), findsOneWidget);
+  });
+
+  testWidgets('the AI can be asked for a new title', (tester) async {
+    String? path;
+    await pumpDetail(
+      tester,
+      [rec(title: 'asdf')],
+      onNewTitle: (req) async {
+        path = req.url.path;
+        return http.Response(jsonEncode(rec(title: 'Dawn fishing with Dad')), 200);
+      },
+    );
+
+    await tester.tap(find.byTooltip('Generate a new title'));
+    await tester.pumpAndSettle();
+
+    expect(path, '/recordings/a/title');
+    expect(find.text('Dawn fishing with Dad'), findsOneWidget);
+    expect(find.text('asdf'), findsNothing);
+    // Only the title was asked for; the summary is the one it already had.
+    expect(find.text('I went fishing with my father at the lake.'), findsOneWidget);
+  });
+
+  testWidgets('after seven days the title and the words can no longer be changed',
+      (tester) async {
+    var calls = 0;
+    Future<http.Response> counted(http.Request req) async {
+      calls++;
+      return http.Response(jsonEncode(rec(daysAgo: 8)), 200);
+    }
+
+    await pumpDetail(tester, [rec(daysAgo: 8)], onPatch: counted, onNewTitle: counted);
+
+    // Still on the page, so the reason beside them makes sense — but inert.
+    expect(find.textContaining('Editing closed 7 days after'), findsOneWidget);
+    await tester.tap(find.byTooltip('Rename'), warnIfMissed: false);
+    await tester.tap(find.byTooltip('Generate a new title'), warnIfMissed: false);
+    await tester.tap(find.text('Edit'), warnIfMissed: false);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Rename memory'), findsNothing);
+    expect(find.text('Edit transcript'), findsNothing);
+    expect(calls, 0);
+    // The memory itself is all still readable.
+    expect(find.text('Fishing trip with Dad'), findsOneWidget);
+    expect(find.text('I went fishing with my father at the lake.'), findsOneWidget);
+  });
+
+  testWidgets('on the seventh day a memory is still editable', (tester) async {
+    await pumpDetail(tester, [rec(daysAgo: 6)]);
+
+    expect(find.textContaining('Editing closed'), findsNothing);
+    await tester.tap(find.byTooltip('Rename'));
+    await tester.pumpAndSettle();
+    expect(find.text('Rename memory'), findsOneWidget);
+  });
+
+  testWidgets('the edit window is the one the server publishes', (tester) async {
+    final client = MockClient((req) async {
+      if (req.url.path == '/recordings') return http.Response(jsonEncode([rec()]), 200);
+      if (req.url.path == '/profile') {
+        return http.Response(jsonEncode({'edit_window_days': 1}), 200);
+      }
+      return http.Response(jsonEncode({}), 200);
+    });
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          apiClientProvider
+              .overrideWithValue(ApiClient(client: client, baseUrl: 'http://test.invalid')),
+        ],
+        child: MaterialApp(
+          theme: AppTheme.light(),
+          home: const MemoryDetailScreen(recordingId: 'a'),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    // Two days old: inside the default window, outside this one.
+    expect(find.textContaining('Editing closed 1 day after'), findsOneWidget);
   });
 
   testWidgets('tapping a row in the recent list opens it', (tester) async {

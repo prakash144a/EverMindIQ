@@ -152,6 +152,13 @@ class Settings(BaseSettings):
     voice_session_max_seconds_free: int = 600
     voice_session_max_seconds_premium: int = 3600
 
+    # How long after it is saved a memory's title and words can still be changed.
+    # The same for every tier: it is not something to sell, it is what keeps a
+    # journal a record of what was captured rather than a document under
+    # permanent revision. Starring and filing are organising, not editing, and
+    # are never closed by this.
+    memory_edit_window_days: int = 7
+
     # Behavior --------------------------------------------------------------
     signed_url_ttl_seconds: int = 900
     rag_top_k: int = 6

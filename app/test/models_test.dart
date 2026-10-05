@@ -35,6 +35,13 @@ void main() {
     // The model stays permissive; ThemeModeStore.decode is what normalises an
     // unknown value, so a new server can't break an old client here.
     expect(UserSettings.fromJson({'theme_mode': 'sepia'}).themeMode, 'sepia');
+
+    // Its own setting, with its own default: a summary follows the memory, not
+    // whatever the answer language happens to be.
+    expect(s.summaryLanguage, 'memory');
+    expect(s.toJson()['summary_language'], 'memory');
+    expect(s.copyWith(summaryLanguage: 'ta').toJson()['summary_language'], 'ta');
+    expect(s.copyWith(summaryLanguage: 'ta').answerLanguage, 'ta');
   });
 
   test('ChatAnswer parses citations', () {

@@ -59,12 +59,13 @@ API and pipeline run and are testable without GCP credentials.
 ```
 users/{uid}
   displayName, createdAt, settings{ onThisDayEnabled, slideshowInterval,
-                                    notificationsEnabled, answerLanguage, retentionDays }
+                                    notificationsEnabled, answerLanguage, summaryLanguage,
+                                    retentionDays }
 
 users/{uid}/recordings/{recordingId}
   eventDate, recordedAt, source (voice|text), audioPath, durationSec, status,
   journalId (empty = unfiled),
-  transcript (original language), language, transcriptEn (optional),
+  transcript (original language), transcriptEdited, language, transcriptEn (optional),
   title, summary, tags[], people[], places[], mood, isMilestone, createdAt, updatedAt
 
 users/{uid}/recordings/{recordingId}/chunks/{chunkId}
@@ -96,6 +97,33 @@ is shared, which is what makes a written memory as recallable as a spoken one. E
 reports the detected language, since nothing upstream determined it. Length is the first real
 **entitlement**: `core/entitlements` caps a typed memory by the caller's tier, read from the
 server-only `userStats` document.
+
+**Editing a memory** (`PATCH /recordings/{id}`) follows one rule: the user owns the title and the
+words, the AI owns everything derived from the words. So `title` is a plain field write with no model
+call, and from then on ingestion leaves it alone (it only ever fills in a missing title). There is no
+`summary` field to write. A changed `transcript` clears what was derived from the old one (summary,
+tags, people, places, mood, language, English copy), drops the memory's chunks, sets
+`status=uploaded` and re-enqueues ingestion, which costs one enrichment call and one embedding call
+and writes a new summary and a new set of vectors — the title is kept because it exists. The chunks
+are dropped at edit time rather than left to be overwritten, so recall can never answer from words
+the user has removed, even if the re-run is slow or fails. `transcriptEdited` makes ingestion treat
+the stored transcript as the source of truth for a spoken memory too, so a redelivered Pub/Sub
+message cannot transcribe the audio back over a correction. A rename or a rewrite also purges the
+On This Day and insight caches, both of which copy titles and summaries. Title and words are refused
+with a 409 while a run is in flight, because that run writes the whole document back. The typed-memory
+cap applies to the new length, except that a memory already over it may be edited at its current size.
+
+`POST /recordings/{id}/title` asks the AI for a **new title**: the way back from a mistaken rename,
+and the way on from an AI title nobody liked. It is one small model call, made in the request, that
+passes the current title as the one to avoid and writes in `settings.summaryLanguage`. Nothing else
+is touched — the words are unchanged, so the summary and the vectors are still right.
+
+All three — rename, rewrite, new title — are open only inside the **edit window**:
+`memory_edit_window_days` (7) from `recordedAt`, the moment of capture, not `eventDate`, so a
+back-dated memory is still editable on the day it is written. After that the API answers 403
+`edit_window_closed`. The number is published on `GET /profile` as `edit_window_days` so the app can
+disable the controls rather than discover the rule from an error. It is the same for every tier.
+Starring, filing and deleting are organising rather than editing, and are never closed by it.
 
 **Journals** are named containers the user files memories into, one per memory. Filing is manual:
 chosen on the record screen, changed later from the memory detail view. Nothing files on the user's
@@ -143,7 +171,11 @@ claiming nothing was ever recorded.
 
 **Cross-lingual:** transcripts stored in original language; a **multilingual** embedding model maps
 meaning across languages, so an English question retrieves Tamil/Hindi/French memories with no
-query-time translation. Answers follow the question's language or `settings.answerLanguage`.
+query-time translation. Answers follow the question's language or `settings.answerLanguage`. A
+memory's title and summary follow `settings.summaryLanguage` instead: `memory` (the default) writes
+them in the memory's own language, a language code writes them in that language whatever the memory
+is in. It is a separate setting because `answerLanguage`'s `auto` means "match my question", and a
+saved memory has no question.
 
 **Insights:** fetch range → map-reduce summarize → extract themes → cache. Long ranges precomputed
 nightly. **On This Day:** nightly job writes `memoryFeed/{today}` from anniversaries + milestones.

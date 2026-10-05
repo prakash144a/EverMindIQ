@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 from app.core.config import Settings, get_settings
 from app.core.media import content_type_for_path
+from app.models.user import SUMMARY_LANGUAGE_MEMORY
 
 # audio_path -> (transcript, language). Seeded by tests / a dev endpoint in mock mode.
 _TRANSCRIPT_SEED: dict[str, tuple[str, str]] = {}
@@ -80,6 +81,41 @@ _SCRIPT_RANGES = (
 )
 
 
+# What a title should be. Shared so the title written at ingestion and one asked
+# for again later are held to the same standard.
+_TITLE_RULE = (
+    "a short, specific, human title for this memory, 3-6 words, from the "
+    "speaker's own perspective (e.g. \"Fishing trip with Dad\", \"The day I moved "
+    "to Chennai\"). No quotes, no trailing punctuation, and never generic filler "
+    "like \"Voice note\" or \"Recording\"."
+)
+
+
+def _summary_language_phrase(summary_language: str) -> str:
+    """The user's title-and-summary language setting, as words for a prompt.
+
+    Spelled out both ways. Handing the model the bare setting left it to guess
+    what the word meant, and it guessed differently from one memory to the next.
+    """
+    if summary_language == SUMMARY_LANGUAGE_MEMORY:
+        return (
+            "the same language the memory itself is written in (if it mixes "
+            "languages, the one it mostly uses)"
+        )
+    return (
+        f"the language with BCP-47 code \"{summary_language}\", whatever "
+        "language the memory itself is in"
+    )
+
+
+def _mock_mark(resolved: str, summary_language: str) -> str:
+    """Mock mode cannot translate, so text asked for in a language other than
+    the memory's is marked with it instead — the same stand-in `_mock_answer`
+    uses, and enough to show the preference reached this far."""
+    wanted = resolved if summary_language == SUMMARY_LANGUAGE_MEMORY else summary_language
+    return f"[{wanted}] " if wanted and wanted != resolved else ""
+
+
 def _mock_detect_language(text: str) -> str:
     """A deterministic stand-in for language detection, by script."""
     for ch in text:
@@ -112,10 +148,29 @@ class GeminiService:
         )
 
     # -- enrichment --------------------------------------------------------
-    def enrich(self, transcript: str, language: str, answer_language: str) -> Enrichment:
+    def enrich(self, transcript: str, language: str, summary_language: str) -> Enrichment:
+        """Title, summary and entities for a memory.
+
+        `summary_language` is the user's setting: "memory" writes the title and
+        summary in the memory's own language, anything else is the code to use.
+        """
         if self.settings.effective_mock:
-            return self._mock_enrich(transcript, language)
-        return self._gemini_enrich(transcript, language, answer_language)  # pragma: no cover
+            return self._mock_enrich(transcript, language, summary_language)
+        return self._gemini_enrich(transcript, language, summary_language)  # pragma: no cover
+
+    def title(
+        self, transcript: str, language: str, summary_language: str, avoid: str = ""
+    ) -> str:
+        """A new title for a memory whose words have not changed.
+
+        `avoid` is the title it has now: the caller is someone who did not want
+        that one, so the answer should be something else.
+        """
+        if self.settings.effective_mock:
+            return self._mock_new_title(transcript, language, summary_language, avoid)
+        return self._gemini_title(  # pragma: no cover
+            transcript, language, summary_language, avoid
+        )
 
     # -- RAG generation ----------------------------------------------------
     def answer(self, question: str, context_blocks: list[str], answer_language: str) -> str:
@@ -132,7 +187,7 @@ class GeminiService:
     # ==================================================================
     # Mock implementations (deterministic)
     # ==================================================================
-    def _mock_enrich(self, transcript: str, language: str) -> Enrichment:
+    def _mock_enrich(self, transcript: str, language: str, summary_language: str) -> Enrichment:
         text = transcript.strip()
         sentences = _SENTENCE_RE.split(text) if text else []
         first = sentences[0] if sentences else text
@@ -141,9 +196,10 @@ class GeminiService:
         caps = sorted(set(_CAP_RE.findall(text)))
         lowered = text.lower()
         resolved = language or _mock_detect_language(text)
+        mark = _mock_mark(resolved, summary_language)
         return Enrichment(
-            title=title,
-            summary=summary,
+            title=mark + title,
+            summary=mark + summary,
             tags=sorted({w for w in re.findall(r"\w{5,}", lowered)})[:5],
             people=caps[:5],
             places=[],
@@ -165,6 +221,24 @@ class GeminiService:
         if len(words) > 6:
             title += "…"
         return title[:1].upper() + title[1:]
+
+    def _mock_new_title(
+        self, transcript: str, language: str, summary_language: str, avoid: str
+    ) -> str:
+        """The title ingestion would give — or, if that is the one being
+        replaced, one taken from the end of the memory instead. Two titles is
+        all the variety the stand-in has; a memory too short to have a second
+        gets the first again."""
+        text = transcript.strip()
+        mark = _mock_mark(language or _mock_detect_language(text), summary_language)
+        title = mark + self._mock_title(text)
+        if title != avoid:
+            return title
+        words = text.split()
+        if len(words) <= 6:
+            return title
+        tail = " ".join(words[-6:]).rstrip(".,;:!?")
+        return f"{mark}…{tail}"
 
     def _mock_answer(self, question: str, context_blocks: list[str], answer_language: str) -> str:
         if not context_blocks:
@@ -223,12 +297,13 @@ class GeminiService:
             text = text[: m.start()].strip()
         return text, lang
 
-    def _gemini_enrich(self, transcript, language, answer_language):  # pragma: no cover
+    def _gemini_enrich(self, transcript, language, summary_language):  # pragma: no cover
         import json
 
         from google.genai import types
 
         client = self._client()
+        lang = _summary_language_phrase(summary_language)
         resp = client.models.generate_content(
             model=self.settings.model_reasoning,
             contents=(
@@ -240,10 +315,7 @@ class GeminiService:
                 "language.\n"
                 "- language: the BCP-47 code of the language the memory is written in (e.g. "
                 "\"en\", \"ta\", \"hi\"). If a language is stated below, echo it back unchanged.\n"
-                "- title: a short, specific, human title for this memory, 3-6 words, from the "
-                "speaker's own perspective (e.g. \"Fishing trip with Dad\", \"The day I moved "
-                "to Chennai\"). No quotes, no trailing punctuation, and never generic filler "
-                "like \"Voice note\" or \"Recording\".\n"
+                f"- title: {_TITLE_RULE}\n"
                 "- summary: 1-2 sentences in the FIRST PERSON, as the speaker would write it "
                 "in their own diary (\"I went to...\", \"We spent the afternoon...\"). Never "
                 "write \"the user\", \"the speaker\", \"they\", or any third-person narration.\n"
@@ -252,7 +324,7 @@ class GeminiService:
                 "home, a new job, a graduation, a major first, a diagnosis or recovery, a "
                 "landmark trip. False for ordinary days, routine updates, passing thoughts, "
                 "and merely happy or pleasant moments. When in doubt, false.\n"
-                f"- Write title and summary in this language: {answer_language}.\n\n"
+                f"- Write title and summary in {lang}.\n\n"
                 f"Transcript ({language or 'language not known — detect it'}):\n{transcript}"
             ),
             config=types.GenerateContentConfig(response_mime_type="application/json"),
@@ -273,6 +345,32 @@ class GeminiService:
             transcript_en=_as_text(data.get("transcript_en")),
             language=_as_text(data.get("language")),
         )
+
+    def _gemini_title(self, transcript, language, summary_language, avoid):  # pragma: no cover
+        client = self._client()
+        lang = _summary_language_phrase(summary_language)
+        # Asked for by someone who did not want the title they have, so handing
+        # the same one back would look like the button did nothing.
+        different = (
+            f"- It must be clearly different from the current title: \"{avoid}\".\n"
+            if avoid
+            else ""
+        )
+        resp = client.models.generate_content(
+            model=self.settings.model_reasoning,
+            contents=(
+                "You are helping someone keep a personal memory journal. The transcript below "
+                "is that person speaking about their own life — it is their memory, not a "
+                "report about a third party.\n\n"
+                "Write a title for this memory. Reply with the title alone, on one line.\n"
+                f"- {_TITLE_RULE}\n"
+                f"{different}"
+                f"- Write it in {lang}.\n\n"
+                f"Transcript ({language or 'language not known'}):\n{transcript}"
+            ),
+        )
+        lines = (resp.text or "").strip().splitlines()
+        return lines[0].strip().strip("\"'“”") if lines else ""
 
     def _gemini_answer(self, question, context_blocks, answer_language):  # pragma: no cover
         client = self._client()

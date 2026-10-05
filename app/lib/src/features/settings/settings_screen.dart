@@ -18,6 +18,16 @@ class SettingsScreen extends ConsumerWidget {
     'fr': 'French',
   };
 
+  // Same languages as above, but the first choice differs: a saved memory has
+  // no question to match, so its default follows the memory itself.
+  static const _summaryLanguages = <String, String>{
+    'memory': 'Match the memory',
+    'en': 'English',
+    'ta': 'Tamil',
+    'hi': 'Hindi',
+    'fr': 'French',
+  };
+
   static const _themeModes = <String, String>{
     'system': 'Match my device',
     'light': 'Light',
@@ -76,6 +86,24 @@ class SettingsScreen extends ConsumerWidget {
                 onChanged: (v) {
                   if (v != null) {
                     _save(context, ref, s.copyWith(answerLanguage: v));
+                  }
+                },
+              ),
+            ),
+            ListTile(
+              title: const Text('Title and summary language'),
+              subtitle: const Text('For the title and summary the AI writes. '
+                  'Applies to memories saved or edited from now on'),
+              trailing: DropdownButton<String>(
+                value: _summaryLanguages.containsKey(s.summaryLanguage)
+                    ? s.summaryLanguage
+                    : 'memory',
+                items: _summaryLanguages.entries
+                    .map((e) => DropdownMenuItem(value: e.key, child: Text(e.value)))
+                    .toList(),
+                onChanged: (v) {
+                  if (v != null) {
+                    _save(context, ref, s.copyWith(summaryLanguage: v));
                   }
                 },
               ),

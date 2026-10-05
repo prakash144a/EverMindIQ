@@ -57,6 +57,10 @@ class Recording {
   /// True once the user has starred/unstarred by hand; ingestion then leaves it alone.
   final bool isMilestoneManual;
 
+  /// True once the user has rewritten the memory's words. For a spoken memory
+  /// that means the transcript is no longer purely the AI's.
+  final bool transcriptEdited;
+
   Recording({
     required this.id,
     required this.eventDate,
@@ -75,9 +79,17 @@ class Recording {
     this.source = 'voice',
     this.journalId = '',
     this.isMilestoneManual = false,
+    this.transcriptEdited = false,
   });
 
   bool get hasAudio => source != 'text';
+
+  /// Whether the title and the words can still be changed: for [windowDays]
+  /// after the memory was saved, counted from capture rather than from the date
+  /// it is about. The server enforces the same rule; this only decides whether
+  /// to offer the controls.
+  bool editableWithin(int windowDays) =>
+      DateTime.now().difference(recordedAt) < Duration(days: windowDays);
 
   factory Recording.fromJson(Map<String, dynamic> j) => Recording(
         id: asText(j['id']),
@@ -101,6 +113,7 @@ class Recording {
         source: j['source'] == null ? 'voice' : asText(j['source']),
         journalId: asText(j['journal_id']),
         isMilestoneManual: j['is_milestone_manual'] as bool? ?? false,
+        transcriptEdited: j['transcript_edited'] as bool? ?? false,
       );
 
   /// Narrow copy for optimistic UI updates — the star and the journal, both of
@@ -123,6 +136,7 @@ class Recording {
         source: source,
         journalId: journalId ?? this.journalId,
         isMilestoneManual: isMilestoneManual,
+        transcriptEdited: transcriptEdited,
       );
 
   DateTime get eventDateTime => DateTime.parse(eventDate);
@@ -183,6 +197,9 @@ class UserProfile {
   final int recordingMaxSec;
   final int voiceSessionMaxSec;
 
+  /// Days after saving that a memory's title and words can still be edited.
+  final int editWindowDays;
+
   const UserProfile({
     this.preferredName = '',
     this.email = '',
@@ -197,6 +214,7 @@ class UserProfile {
     this.recordingsMonthResetsOn,
     this.recordingMaxSec = 60,
     this.voiceSessionMaxSec = 600,
+    this.editWindowDays = 7,
   });
 
   factory UserProfile.fromJson(Map<String, dynamic> j) => UserProfile(
@@ -221,6 +239,7 @@ class UserProfile {
         recordingMaxSec: asInt(j['recording_max_sec']) > 0 ? asInt(j['recording_max_sec']) : 60,
         voiceSessionMaxSec:
             asInt(j['voice_session_max_sec']) > 0 ? asInt(j['voice_session_max_sec']) : 600,
+        editWindowDays: asInt(j['edit_window_days']) > 0 ? asInt(j['edit_window_days']) : 7,
       );
 
   bool get isPremium => tier == 'premium';
@@ -450,6 +469,11 @@ class UserSettings {
   final int slideshowIntervalSec;
   final bool notificationsEnabled;
   final String answerLanguage;
+
+  /// Language a memory's title and summary are written in: 'memory' to match
+  /// the memory itself, or a language code. Not the same as [answerLanguage],
+  /// whose 'auto' means "match my question" — a saved memory has no question.
+  final String summaryLanguage;
   final int retentionDays;
 
   /// 'system' | 'light' | 'dark'. Kept as a raw string because this file is
@@ -465,6 +489,7 @@ class UserSettings {
     required this.retentionDays,
     // Optional so adding it doesn't break existing call sites.
     this.themeMode = 'system',
+    this.summaryLanguage = 'memory',
   });
 
   factory UserSettings.fromJson(Map<String, dynamic> j) => UserSettings(
@@ -474,6 +499,7 @@ class UserSettings {
         answerLanguage: j['answer_language'] as String? ?? 'auto',
         retentionDays: j['retention_days'] as int? ?? 0,
         themeMode: j['theme_mode'] as String? ?? 'system',
+        summaryLanguage: j['summary_language'] as String? ?? 'memory',
       );
 
   Map<String, dynamic> toJson() => {
@@ -481,6 +507,7 @@ class UserSettings {
         'slideshow_interval_sec': slideshowIntervalSec,
         'notifications_enabled': notificationsEnabled,
         'answer_language': answerLanguage,
+        'summary_language': summaryLanguage,
         'retention_days': retentionDays,
         'theme_mode': themeMode,
       };
@@ -492,6 +519,7 @@ class UserSettings {
     String? answerLanguage,
     int? retentionDays,
     String? themeMode,
+    String? summaryLanguage,
   }) =>
       UserSettings(
         onThisDayEnabled: onThisDayEnabled ?? this.onThisDayEnabled,
@@ -500,5 +528,6 @@ class UserSettings {
         answerLanguage: answerLanguage ?? this.answerLanguage,
         retentionDays: retentionDays ?? this.retentionDays,
         themeMode: themeMode ?? this.themeMode,
+        summaryLanguage: summaryLanguage ?? this.summaryLanguage,
       );
 }

@@ -61,6 +61,16 @@ def max_voice_session_seconds(tier: UserTier) -> int:
     return settings.voice_session_max_seconds_free
 
 
+def edit_window_days() -> int:
+    """How many days after it is saved a memory's title and words stay editable.
+
+    Not tier-dependent, but it lives here because it is published and enforced
+    the same way the tier limits are: sent on `GET /profile` so the app can
+    disable the controls, and checked again by the API.
+    """
+    return get_settings().memory_edit_window_days
+
+
 def tier_for(repo, uid: str) -> UserTier:
     """The caller's tier, free when we have never seen them.
 

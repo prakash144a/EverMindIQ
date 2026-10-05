@@ -31,6 +31,10 @@ def _utcnow() -> datetime:
 # unknown value is rejected with a 422 instead of being stored.
 ThemeMode = Literal["system", "light", "dark"]
 
+# The `summary_language` value that means "whatever language the memory is in".
+SUMMARY_LANGUAGE_MEMORY = "memory"
+_SUMMARY_LANGUAGE_RE = r"^(memory|[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*)$"
+
 
 class UserSettings(BaseModel):
     on_this_day_enabled: bool = True
@@ -38,6 +42,12 @@ class UserSettings(BaseModel):
     notifications_enabled: bool = True
     # "auto" = answer in the language of the question; or an ISO code like "en".
     answer_language: str = "auto"
+    # Language a memory's title and summary are written in. "memory" = the
+    # language the memory itself is in; or a BCP-47 code like "en". Separate from
+    # `answer_language` because that one's "auto" means "match my question", and
+    # a saved memory has no question to match. Pattern-checked, not free text:
+    # the value is placed in the enrichment prompt.
+    summary_language: str = Field(default=SUMMARY_LANGUAGE_MEMORY, pattern=_SUMMARY_LANGUAGE_RE)
     retention_days: int = 0  # 0 = keep forever
     # Which theme the app paints in; "system" follows the OS. Stored server-side
     # so a second device inherits the choice.
@@ -292,6 +302,10 @@ class ProfileView(BaseModel):
     recording_max_sec: int = 0
     voice_session_max_sec: int = 0
 
+    # Days after saving that a memory's title and words can still be edited. The
+    # app disables those controls itself once this has passed.
+    edit_window_days: int = 0
+
     @property
     def recordings_left_this_month(self) -> int:
         return max(0, self.recordings_per_month - self.recordings_used_this_month)
@@ -306,6 +320,7 @@ class ProfileView(BaseModel):
         # Imported here rather than at module scope: `core.entitlements` reads
         # settings and imports this module for `UserTier`.
         from app.core.entitlements import (
+            edit_window_days,
             max_journals,
             max_recording_seconds,
             max_recordings_per_month,
@@ -323,6 +338,7 @@ class ProfileView(BaseModel):
             "recordings_month_resets_on": month_resets_on(),
             "recording_max_sec": max_recording_seconds(tier),
             "voice_session_max_sec": max_voice_session_seconds(tier),
+            "edit_window_days": edit_window_days(),
         }
         if profile is None:
             return cls(**limits)
@@ -338,6 +354,7 @@ class ProfileView(BaseModel):
 
 __all__ = [
     "MAX_TRAIL",
+    "SUMMARY_LANGUAGE_MEMORY",
     "DeviceSession",
     "LoginTicket",
     "OtpChallenge",

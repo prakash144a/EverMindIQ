@@ -96,16 +96,18 @@ def process_recording(uid: str, recording_id: str) -> Recording:
 
     try:
         gemini = get_gemini()
-        if rec.source is RecordingSource.text:
+        if rec.source is RecordingSource.text or rec.transcript_edited:
             # A typed memory already carries its own transcript. Nothing to
             # fetch, nothing to transcribe; the pipeline joins at enrichment.
+            # So does a spoken one whose transcript the user has since corrected:
+            # transcribing the audio again would throw their correction away.
             transcript, language = rec.transcript, rec.language
         else:
             audio_bytes = get_storage().read_bytes(rec.audio_path)
             transcript, language = gemini.transcribe(rec.audio_path, audio_bytes)
 
-        answer_lang = repo.get_settings_doc(uid).answer_language
-        enrich = gemini.enrich(transcript, language, answer_lang)
+        summary_lang = repo.get_settings_doc(uid).summary_language
+        enrich = gemini.enrich(transcript, language, summary_lang)
 
         rec.transcript = transcript
         # Transcription reports the language it heard; typed text arrives without
@@ -113,6 +115,9 @@ def process_recording(uid: str, recording_id: str) -> Recording:
         # detected language always wins over the enricher's echo of it.
         rec.language = language or enrich.language
         rec.transcript_en = enrich.transcript_en
+        # A title that already exists is kept — one the user typed, renamed, or
+        # was given on an earlier run. Only the summary follows the words when a
+        # memory is edited and comes back through here.
         rec.title = rec.title or enrich.title
         rec.summary = enrich.summary
         rec.tags = enrich.tags

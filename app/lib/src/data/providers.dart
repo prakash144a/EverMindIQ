@@ -138,6 +138,50 @@ class RecordingsNotifier extends AsyncNotifier<List<Recording>> {
     }
   }
 
+  /// Rename a memory.
+  ///
+  /// Not optimistic: the server trims the title and can refuse it (a memory
+  /// still being processed cannot be edited), so the row changes once it agrees.
+  Future<void> rename(String recordingId, String title) async {
+    final saved = await ref.read(apiClientProvider).renameRecording(recordingId, title);
+    _replace(saved);
+    // Both were built from the old title.
+    ref.invalidate(onThisDayProvider);
+    ref.invalidate(insightProvider);
+  }
+
+  /// Ask the AI for a new title — undoing a rename, or replacing an AI title
+  /// that was not liked. Not optimistic: there is nothing to show until the
+  /// model has answered.
+  Future<void> regenerateTitle(String recordingId) async {
+    final saved = await ref.read(apiClientProvider).regenerateTitle(recordingId);
+    _replace(saved);
+    ref.invalidate(onThisDayProvider);
+    ref.invalidate(insightProvider);
+  }
+
+  /// Replace a memory's words. The server rewrites the summary and re-indexes
+  /// the memory; the title stays.
+  ///
+  /// In production the reply arrives before that work is done, so the row comes
+  /// back processing and the poll is restarted to pick up the new summary.
+  Future<void> rewrite(String recordingId, String text) async {
+    final saved = await ref.read(apiClientProvider).editRecordingText(recordingId, text);
+    _replace(saved);
+    _pollsLeft = _maxPolls;
+    _schedule(state.valueOrNull ?? const []);
+    ref.invalidate(onThisDayProvider);
+    ref.invalidate(insightProvider);
+  }
+
+  /// Swap one row for the server's copy of it.
+  void _replace(Recording saved) {
+    state = AsyncData([
+      for (final r in state.valueOrNull ?? const <Recording>[])
+        if (r.id == saved.id) saved else r,
+    ]);
+  }
+
   /// Erase a memory for good.
   ///
   /// Deliberately *not* optimistic, unlike the star and the journal picker. Those
