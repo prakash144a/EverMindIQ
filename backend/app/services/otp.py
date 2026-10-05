@@ -53,14 +53,14 @@ def _now() -> datetime:
 
 
 def _body(code: str, ttl_minutes: int) -> tuple[str, str, str]:
-    subject = f"{code} is your VoiceIQ code"
+    subject = f"{code} is your MemoriesIQ code"
     text = (
-        f"Your VoiceIQ verification code is {code}.\n\n"
+        f"Your MemoriesIQ verification code is {code}.\n\n"
         f"It expires in {ttl_minutes} minutes. If you didn't ask for this, you can "
         f"ignore this email — nothing will change.\n"
     )
     html = (
-        f"<p>Your VoiceIQ verification code is</p>"
+        f"<p>Your MemoriesIQ verification code is</p>"
         f'<p style="font-size:28px;font-weight:600;letter-spacing:4px">{code}</p>'
         f"<p>It expires in {ttl_minutes} minutes. If you didn't ask for this, you can "
         f"ignore this email — nothing will change.</p>"

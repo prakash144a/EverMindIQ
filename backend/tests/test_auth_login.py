@@ -476,3 +476,13 @@ def test_the_name_can_still_be_changed_from_the_profile(client):
     body = log_in(client, "p@example.com", name="Prakash")
     client.patch("/profile", json={"preferred_name": "PK"}, headers=signed_in(body))
     assert client.get("/profile", headers=signed_in(body)).json()["preferred_name"] == "PK"
+
+
+def test_the_sign_in_email_uses_the_product_name():
+    """ "VoiceIQ" is the internal name. The email is the first thing a new person
+    reads from us, and it has to say the name they signed up to."""
+    from app.services.otp import _body
+
+    for part in _body("123456", 10):
+        assert "MemoriesIQ" in part
+        assert "VoiceIQ" not in part
