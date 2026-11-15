@@ -316,7 +316,7 @@ Ordered by what unblocks the most. (1) gates (6); the rest are independent.
   still **no purchase flow** — premium is granted by an admin in the console — so the caps show plain
   counters and no upsell
 - [x] **Marketing site** (`site/`) — static HTML for ad traffic, plus the privacy policy the Play
-  listing requires. Legal copy complete: NATIVE MINDS AI LABS, WA, USA, `info@nativemindsai.com`
+  listing requires. Legal copy complete: NativeMinds AI Solutions LLC, WA, USA, `info@nativemindsai.com`
 - [x] **Firebase Hosting** — one target (`admin`) in `firebase.json` + `.firebaserc`;
   `firebasehosting.googleapis.com` enabled in Terraform. The `site` target was dropped when the
   marketing page moved to Azure, because CI deploys every hosting target and would have republished
